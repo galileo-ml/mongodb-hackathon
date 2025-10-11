@@ -1,0 +1,17 @@
+[project]
+name = "multimodal-diarization"
+version = "0.1.0"
+description = "Prototype backend for multimodal speaker diarization ingest"
+requires-python = ">=3.10"
+dependencies = [
+  "fastapi==0.110.0",
+  "uvicorn[standard]==0.29.0",
+  "aiortc==1.7.0",
+]
+
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[tool.uv]
+package = false
