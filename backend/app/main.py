@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from datetime import datetime
 from pathlib import Path
 from time import monotonic
@@ -21,7 +22,8 @@ from .audio import (
     AudioPipeline,
     PipelineConfig,
     PyannoteSpeakerEmbedder,
-    VoiceActivitySegmenter,
+    SegmenterConfig,
+    WebRTCVADSegmenter,
 )
 from .core import AudioChunk
 from .services.vector_store import MongoDBVectorStore
@@ -53,12 +55,21 @@ vector_store = MongoDBVectorStore(
     collection="speaker_embeddings",
 )
 
+pipeline_config = PipelineConfig()
+segmenter = WebRTCVADSegmenter(
+    SegmenterConfig(
+        mode=pipeline_config.vad_mode,
+        min_speech_ms=pipeline_config.vad_min_speech_ms,
+        min_silence_ms=pipeline_config.vad_min_silence_ms,
+    )
+)
+
 audio_pipeline = AudioPipeline(
     denoiser=AdaptiveDenoiser(),
-    segmenter=VoiceActivitySegmenter(),
+    segmenter=segmenter,
     embedder=PyannoteSpeakerEmbedder(),
     vector_store=vector_store,
-    config=PipelineConfig(),
+    config=pipeline_config,
 )
 
 METRIC_INTERVAL_SECONDS = 30
@@ -129,6 +140,7 @@ async def index() -> FileResponse:
 
 @app.post("/offer", response_model=SDPModel)
 async def offer(session: SDPModel) -> SDPModel:
+    logger.info("Received SDP offer payload length=%d", len(session.sdp))
     pc = RTCPeerConnection()
     pcs.add(pc)
     session_id = f"sess-{uuid4().hex[:8]}"
@@ -160,6 +172,13 @@ async def offer(session: SDPModel) -> SDPModel:
                             data = bytes(plane)
                         sample_rate = getattr(frame, "sample_rate", None) or 16000
                         last_sample_rate = sample_rate
+                        if frame_count == 1:
+                            logger.info(
+                                "Session %s received first audio frame (%d bytes, sr=%d)",
+                                session_id,
+                                len(data),
+                                sample_rate,
+                            )
                         chunk = AudioChunk(
                             session_id=session_id,
                             data=data,

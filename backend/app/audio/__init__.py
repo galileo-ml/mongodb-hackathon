@@ -1,14 +1,14 @@
 """Audio processing components for diarization."""
 
 from .denoiser import AdaptiveDenoiser
-from .segmenter import SegmenterConfig, VoiceActivitySegmenter
+from .segmenter import SegmenterConfig, WebRTCVADSegmenter
 from .embedder import PyannoteSpeakerEmbedder
 from .pipeline import AudioPipeline, PipelineConfig
 
 __all__ = [
     "AdaptiveDenoiser",
     "SegmenterConfig",
-    "VoiceActivitySegmenter",
+    "WebRTCVADSegmenter",
     "PyannoteSpeakerEmbedder",
     "PipelineConfig",
     "AudioPipeline",
