@@ -11,14 +11,16 @@ This is a **mock backend** for testing the frontend WebRTC + SSE integration. It
 ```bash
 cd mock-backend
 uv sync
-uv run uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+uv run uvicorn app.main:app --reload --host 0.0.0.0 --port 8001
 ```
 
 You should see:
 ```
 🚀 Starting Mock FastAPI backend...
-INFO:     Uvicorn running on http://0.0.0.0:8000
+INFO:     Uvicorn running on http://0.0.0.0:8001
 ```
+
+**Note:** Mock backend runs on port 8001 to avoid conflicts with the real backend (port 8000).
 
 ### 2. Start Frontend
 
@@ -38,13 +40,13 @@ npm run dev
 ## What's Happening?
 
 ```
-Browser                Mock Backend (port 8000)
+Browser                Mock Backend (port 8001)
   │                           │
   ├──── WebRTC ──────────────>│  Receives video+audio
   │     (video+audio)          │
-  │                            │  Processes every 30 frames
+  │                            │  Sends mock person data every 5s
   │                            │
-  │<────── SSE ────────────────│  Sends mock AI response
+  │<────── SSE ────────────────│  Sends person notifications
         (AI events)
 ```
 
@@ -59,10 +61,10 @@ Browser                Mock Backend (port 8000)
 
 ```bash
 # Health check
-curl http://localhost:8000/health
+curl http://localhost:8001/health
 
 # SSE stream (Ctrl+C to stop)
-curl -N http://localhost:8000/events?session_id=test
+curl -N http://localhost:8001/events?session_id=test
 ```
 
 ## Next Steps

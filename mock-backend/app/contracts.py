@@ -8,3 +8,4 @@ class PersonData(BaseModel):
     name: str
     description: str
     relationship: str
+    person_id: str | None = None
