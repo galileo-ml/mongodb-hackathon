@@ -1,4 +1,4 @@
-"""Mock consumer that demonstrates how to consume inference results via SSE."""
+"""Mock consumer - AR Glasses Display Simulator (shows PERSON_DETECTED results only)."""
 
 import asyncio
 import json
@@ -35,7 +35,7 @@ async def consume_inference_stream():
                         continue
 
                     logger.info("✓ Connected to inference stream")
-                    logger.info("=" * 100)
+                    logger.info("=" * 80)
                     retry_delay = 5  # Reset on successful connection
 
                     async for line in response.aiter_lines():
@@ -81,6 +81,7 @@ async def main():
     print("MOCK CONSUMER - AR Glasses Display Simulator")
     print("=" * 80)
     print(f"Connecting to: {INFERENCE_SERVICE_URL}")
+    print("Displays: PERSON_DETECTED events only")
     print("Press Ctrl+C to stop")
     print("=" * 80 + "\n")
 

@@ -1,29 +1,69 @@
-"""Data models for the inference service - Dementia care focus."""
+"""Data models for the inference service - AR Glasses with two event types."""
 
 from datetime import datetime
+from typing import Literal
 from pydantic import BaseModel, Field
 
 
-class ConversationEvent(BaseModel):
-    """Event from speaker diarization metadata service."""
+class ConversationUtterance(BaseModel):
+    """Single utterance in a conversation - no timestamp needed."""
 
-    person_id: str = Field(..., description="Speaker/person identifier from diarization")
-    text: str = Field(..., description="Transcribed conversation text")
-    timestamp: datetime = Field(..., description="Event timestamp")
-    confidence: float = Field(..., ge=0.0, le=1.0, description="Diarization confidence score")
-    event_id: str | None = Field(None, description="Optional unique event identifier")
-    conversation_id: str | None = Field(None, description="Optional conversation session identifier")
+    speaker: str = Field(..., description="Speaker identifier ('patient' or person_id)")
+    text: str = Field(..., description="What was said")
 
     class Config:
         json_schema_extra = {
             "example": {
-                "person_id": "person_sarah",
-                "text": "Hi dad, how are you feeling today?",
-                "timestamp": "2025-10-11T14:30:00Z",
-                "confidence": 0.95,
-                "event_id": "evt_001",
-                "conversation_id": "conv_abc123"
+                "speaker": "person_001",
+                "text": "Hi dad, how are you feeling today?"
             }
+        }
+
+
+class ConversationEvent(BaseModel):
+    """Event from speaker diarization metadata service - two types."""
+
+    event_type: Literal["PERSON_DETECTED", "CONVERSATION_END"] = Field(
+        ..., description="Type of event: PERSON_DETECTED or CONVERSATION_END"
+    )
+    person_id: str = Field(..., description="Person identifier from diarization")
+    timestamp: datetime | None = Field(None, description="Event timestamp (auto-generated if not provided)")
+    conversation: list[ConversationUtterance] | None = Field(
+        None, description="Structured conversation array (only for CONVERSATION_END)"
+    )
+
+    class Config:
+        json_schema_extra = {
+            "examples": [
+                {
+                    "event_type": "PERSON_DETECTED",
+                    "person_id": "person_001",
+                    "timestamp": "2025-10-11T14:30:00Z"
+                },
+                {
+                    "event_type": "CONVERSATION_END",
+                    "person_id": "person_001",
+                    "timestamp": "2025-10-11T14:35:00Z",
+                    "conversation": [
+                        {
+                            "speaker": "person_001",
+                            "text": "Hi dad, how are you feeling today?"
+                        },
+                        {
+                            "speaker": "patient",
+                            "text": "I'm doing well, thanks for asking."
+                        },
+                        {
+                            "speaker": "person_001",
+                            "text": "I got that promotion at work I mentioned!"
+                        },
+                        {
+                            "speaker": "patient",
+                            "text": "That's wonderful news! Congratulations!"
+                        }
+                    ]
+                }
+            ]
         }
 
 
