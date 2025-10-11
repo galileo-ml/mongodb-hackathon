@@ -2,13 +2,14 @@
 
 from .denoiser import AdaptiveDenoiser
 from .segmenter import SegmenterConfig, VoiceActivitySegmenter
-from .embeddings import SpeakerEmbedder
-from .pipeline import AudioPipeline
+from .embedder import PyannoteSpeakerEmbedder
+from .pipeline import AudioPipeline, PipelineConfig
 
 __all__ = [
     "AdaptiveDenoiser",
     "SegmenterConfig",
     "VoiceActivitySegmenter",
-    "SpeakerEmbedder",
+    "PyannoteSpeakerEmbedder",
+    "PipelineConfig",
     "AudioPipeline",
 ]
