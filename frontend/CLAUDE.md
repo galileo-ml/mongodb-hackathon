@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**ForgetMeNot** - An AI-powered real-time webcam streaming application built for a MongoDB hackathon. The app captures webcam video frames and streams them via WebSocket to a backend for AI analysis and response generation.
+**ForgetMeNot** - An AI-powered real-time webcam streaming application built for a MongoDB hackathon. The app captures webcam video/audio and streams them via WebRTC to a backend for AI analysis, then receives person detection notifications via Server-Sent Events (SSE).
 
 ## Development Commands
 
@@ -25,56 +25,68 @@ pnpm start
 pnpm lint
 ```
 
-**Important**: This project uses a **custom Next.js server** (`server.js`) instead of the default Next.js dev server. The custom server is required for WebSocket support.
+**Important**: This project uses standard Next.js dev server. The backend is a **separate Python FastAPI server** that handles WebRTC and SSE.
 
 ## Architecture
 
-### Custom Server Architecture
+### Two-Server Architecture
 
-This app uses a custom Node.js server (`server.js` in root) that:
-- Runs the Next.js app
-- Hosts a WebSocket server at `/api/ws`
-- Handles WebSocket upgrade requests
-- Processes binary video frame data from clients
-- Returns mock AI responses (currently placeholder logic for backend integration)
+This app uses a **decoupled architecture** with two servers:
 
-**Key point**: Standard Next.js API routes coexist with the WebSocket endpoint. The WebSocket server intercepts upgrade requests at `/api/ws`, while all other routes are handled by Next.js.
+1. **Frontend Server** (Next.js on port 3000)
+   - Standard Next.js app
+   - No custom server needed
+   - Handles UI rendering only
 
-### Video Streaming Flow
+2. **Backend Server** (FastAPI on port 8000)
+   - Python FastAPI server (see `mock-backend/` or `backend/`)
+   - Handles WebRTC video/audio ingress
+   - Processes frames for AI analysis
+   - Streams notifications via SSE
+
+### Video Streaming Flow (WebRTC + SSE)
 
 1. **Frontend** (`components/webcam-stream.tsx`):
-   - Accesses user's webcam via `navigator.mediaDevices.getUserMedia()`
-   - Captures frames at ~10 FPS using Canvas API
-   - Converts frames to JPEG blobs
-   - Sends binary frame data via WebSocket to `/api/ws`
-   - Receives AI responses via WebSocket messages
-   - Displays responses in AI overlay component
+   - Accesses user's webcam + microphone via `getUserMedia()`
+   - Establishes WebRTC connection to backend
+   - Sends offer to `http://localhost:8000/offer`
+   - Streams video + audio tracks continuously via WebRTC
+   - Subscribes to SSE endpoint for AI notifications
+   - Displays person detection events in AI overlay
 
-2. **WebSocket Server** (`server.js`):
-   - Accepts WebSocket connections
-   - Receives binary frame data (JPEG images as ArrayBuffers)
-   - Currently sends mock AI responses
-   - **TODO**: Replace mock responses with actual backend AI/LLM integration
+2. **Backend** (`mock-backend/app/main.py`):
+   - Accepts WebRTC connections via `/offer` endpoint
+   - Receives video + audio tracks in real-time
+   - Processes frames (mock: every 5 seconds sends notification)
+   - Broadcasts events to all SSE clients
+   - Logs data reception every 5 seconds
 
 3. **AI Overlay** (`components/ai-overlay.tsx`):
-   - Displays AI-generated responses over the video feed
+   - Displays person detection notifications over video feed
+   - Shows context about detected people
    - Provides tabs for suggestions and follow-up questions
    - Dismissible modal interface
 
-### WebSocket Protocol
+### Communication Protocols
 
-**Client → Server** (binary):
-- Raw JPEG image data as ArrayBuffer
+**WebRTC (Frontend → Backend)**:
+- Video + audio streams sent continuously
+- Peer connection established via offer/answer negotiation
+- Backend receives `RTCTrack` objects for processing
 
-**Server → Client** (JSON):
+**SSE (Backend → Frontend)**:
+- Server-Sent Events for one-way push notifications
+- Endpoint: `GET http://localhost:8000/events?session_id=<id>`
+- Event format:
 ```json
 {
-  "type": "connection" | "ai-response",
+  "type": "person-detected" | "ai-response" | "connection",
   "data": {
-    "message"?: string,
-    "llmResponse"?: string,
-    "timestamp": string
-  }
+    "llmResponse": "Person detected: John Doe...",
+    "personId"?: "person_0",
+    "confidence"?: 0.95
+  },
+  "timestamp": "2025-10-11T12:00:00Z"
 }
 ```
 
@@ -82,23 +94,30 @@ This app uses a custom Node.js server (`server.js` in root) that:
 
 - **Main page**: `app/page.tsx` - Simple container for WebcamStream component
 - **WebcamStream**: `components/webcam-stream.tsx` - Core component handling:
-  - Webcam access and streaming
-  - WebSocket connection management
-  - Frame capture and transmission
-  - Automatic reconnection on disconnect
+  - Webcam + microphone access
+  - WebRTC peer connection setup and management
+  - SSE subscription for AI notifications
   - Connection status indicator (top-right)
-- **AiOverlay**: `components/ai-overlay.tsx` - Modal overlay for displaying AI responses
+- **AiOverlay**: `components/ai-overlay.tsx` - Modal overlay for displaying person detection notifications
 - **UI Components**: `components/ui/*` - shadcn/ui component library (New York style)
 
 ### Tech Stack
 
+**Frontend:**
 - **Framework**: Next.js 15 (App Router)
-- **WebSocket**: `ws` library
+- **WebRTC**: Browser native `RTCPeerConnection`
+- **SSE**: Browser native `EventSource`
 - **UI Library**: shadcn/ui (Radix UI primitives)
 - **Styling**: Tailwind CSS 4
 - **Icons**: Lucide React
 - **Fonts**: Inter (sans), Geist Mono
 - **Package Manager**: pnpm
+
+**Backend (Mock):**
+- **Framework**: FastAPI (Python)
+- **WebRTC**: `aiortc` library
+- **Server**: Uvicorn ASGI server
+- **Package Manager**: `uv`
 
 ### Path Aliases
 
@@ -116,28 +135,61 @@ TypeScript and imports use `@/*` alias:
 - **Dark mode**: Enabled by default in layout
 - **shadcn/ui**: Configured with "new-york" style variant, CSS variables enabled
 
-## Integration Points for Backend
+## Testing with Mock Backend
 
-When connecting to a real backend AI service:
+### Quick Start (2 Terminal Windows)
 
-1. **Replace mock responses** in `server.js` (lines 42-76):
-   - Remove the mock response array
-   - Add actual AI/LLM API calls
-   - Process the received JPEG binary data
-   - Return structured responses
+**Terminal 1 - Start Mock Backend:**
+```bash
+cd mock-backend
+uv sync  # Install dependencies (first time only)
+uv run uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+```
 
-2. **Alternative**: Point WebSocket URL to external backend:
-   - Modify `connectWebSocket()` in `components/webcam-stream.tsx` (line 33)
-   - Change `wsUrl` to point to your backend WebSocket server
-   - Ensure backend expects binary JPEG data and returns JSON with `type` and `data` fields
+**Terminal 2 - Start Frontend:**
+```bash
+cd frontend
+pnpm install  # First time only
+pnpm dev
+```
 
-3. **Frame rate adjustment**:
-   - Current: ~10 FPS (100ms interval) in `webcam-stream.tsx:162`
-   - Adjust interval based on backend processing capabilities
+**Browser:**
+1. Open http://localhost:3000
+2. Allow camera + microphone access
+3. Watch for "Connected (WebRTC)" indicator (top-right)
+4. Person notifications will appear every 5 seconds
+5. Backend logs will show data reception every 5 seconds
+
+### Mock Backend Behavior
+
+- **Data logging**: Every 5 seconds, logs video FPS and frame count
+- **Person notifications**: Every 5 seconds, broadcasts mock person detection to SSE clients
+- **Mock people**: Cycles through 5 mock people (John Doe, Jane Smith, etc.)
+
+## Integration Points for Real Backend
+
+When building the real backend:
+
+1. **Replace mock-backend with real backend**:
+   - Build in `backend/` directory instead of `mock-backend/`
+   - Implement same endpoints: `/offer` (WebRTC) and `/events` (SSE)
+   - Add actual AI processing:
+     - Face detection and recognition
+     - Speaker diarization
+     - MongoDB Atlas Vector Search for context retrieval
+     - LLM integration for response generation
+
+2. **Backend URL configuration**:
+   - Current: `BACKEND_URL = "http://localhost:8000"` in `webcam-stream.tsx:18`
+   - Change to production backend URL when deploying
+
+3. **Notification timing**:
+   - Mock: Every 5 seconds
+   - Real: Event-driven when person detected/identified
 
 ## Known Limitations
 
-- No audio streaming implemented (mute button is UI-only)
+- Mock backend only (no real AI processing yet)
 - No video recording/playback functionality
-- WebSocket errors don't show user-friendly messages
 - No frame buffering or quality adjustment based on connection
+- Mute button is UI-only (audio is always captured for WebRTC)

@@ -2,19 +2,24 @@
 
 import { useEffect, useRef, useState } from "react"
 import { Button } from "@/components/ui/button"
-import { Mic, MicOff, Video, VideoOff } from "lucide-react"
-import { AiOverlay } from "@/components/ai-overlay"
+import { Video, VideoOff } from "lucide-react"
+import { PersonNotification } from "@/components/person-notification"
+
+interface PersonData {
+  name: string
+  description: string
+  relationship: string
+}
 
 export default function WebcamStream() {
   const videoRef = useRef<HTMLVideoElement>(null)
   const pcRef = useRef<RTCPeerConnection | null>(null)
   const [isStreaming, setIsStreaming] = useState(false)
-  const [isMuted, setIsMuted] = useState(true)
-  const [aiResponse, setAiResponse] = useState<string | null>(null)
+  const [personData, setPersonData] = useState<PersonData | null>(null)
   const [isConnected, setIsConnected] = useState(false)
   const [eventSource, setEventSource] = useState<EventSource | null>(null)
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null)
-  
+
   const BACKEND_URL = "http://localhost:8000"
 
   useEffect(() => {
@@ -44,8 +49,13 @@ export default function WebcamStream() {
           const message = JSON.parse(event.data)
           console.log('[SSE] Received:', message)
 
-          if (message.type === 'ai-response' && message.data.llmResponse) {
-            setAiResponse(message.data.llmResponse)
+          // Handle person data (simplified structure)
+          if (message.name && message.description && message.relationship) {
+            setPersonData({
+              name: message.name,
+              description: message.description,
+              relationship: message.relationship,
+            })
           }
         } catch (err) {
           console.error('[SSE] Error parsing message:', err)
@@ -197,21 +207,17 @@ export default function WebcamStream() {
         <span className="text-xs text-white/80">{isConnected ? 'Connected (WebRTC)' : 'Disconnected'}</span>
       </div>
 
-      {aiResponse && <AiOverlay response={aiResponse} onClose={() => setAiResponse(null)} />}
+      {/* Person Notification */}
+      {personData && (
+        <PersonNotification
+          name={personData.name}
+          description={personData.description}
+          relationship={personData.relationship}
+          onClose={() => setPersonData(null)}
+        />
+      )}
 
-      <div className="absolute bottom-0 left-0 right-0 flex items-center justify-between px-6 py-4 bg-gradient-to-t from-black/80 to-transparent">
-        <div className="flex items-center gap-3">
-          <Button
-            size="icon"
-            variant={isMuted ? "secondary" : "default"}
-            onClick={() => setIsMuted(!isMuted)}
-            className="h-12 w-12 rounded-full"
-          >
-            {isMuted ? <MicOff className="h-5 w-5" /> : <Mic className="h-5 w-5" />}
-          </Button>
-          <span className="text-sm text-white/80">{isMuted ? "Unmute" : "Mute"}</span>
-        </div>
-
+      <div className="absolute bottom-0 left-0 right-0 flex items-center justify-center px-6 py-4 bg-gradient-to-t from-black/80 to-transparent">
         <div className="flex items-center gap-3">
           <Button
             size="icon"
@@ -223,10 +229,6 @@ export default function WebcamStream() {
           </Button>
           <span className="text-sm text-white/80">{isStreaming ? "Stop Video" : "Start Video"}</span>
         </div>
-
-        <Button size="lg" variant="destructive" onClick={stopWebcam} className="rounded-md px-8">
-          End
-        </Button>
       </div>
     </div>
   )

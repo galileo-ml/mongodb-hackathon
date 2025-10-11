@@ -1,61 +1,55 @@
 "use client"
 
-import { useEffect, useState } from "react"
-import { X, User } from "lucide-react"
+import { useEffect } from "react"
+import { Card } from "@/components/ui/card"
 
-interface PersonInfo {
+interface PersonNotificationProps {
   name: string
-  relationship: string
   description: string
+  relationship: string
+  onClose: () => void
+  autoDismiss?: boolean
+  dismissDelay?: number
 }
 
-export function PersonNotification() {
-  const [isVisible, setIsVisible] = useState(false)
-
+export function PersonNotification({
+  name,
+  description,
+  relationship,
+  onClose,
+  autoDismiss = true,
+  dismissDelay = 8000,
+}: PersonNotificationProps) {
   useEffect(() => {
-    const interval = setInterval(() => {
-      setIsVisible(true)
-      // Auto-hide after 8 seconds
-      setTimeout(() => setIsVisible(false), 8000)
-    }, 5000)
+    if (autoDismiss) {
+      const timer = setTimeout(() => {
+        onClose()
+      }, dismissDelay)
 
-    return () => clearInterval(interval)
-  }, [])
-
-  const personInfo: PersonInfo = {
-    name: "John",
-    relationship: "Second son",
-    description: "i met this person last week",
-  }
-
-  if (!isVisible) return null
+      return () => clearTimeout(timer)
+    }
+  }, [autoDismiss, dismissDelay, onClose])
 
   return (
-    <div className="fixed bottom-24 left-1/2 -translate-x-1/2 z-50 animate-in slide-in-from-bottom-4 duration-300">
-      <div className="relative bg-black/40 backdrop-blur-xl border border-white/10 rounded-lg shadow-2xl p-4 min-w-[400px] max-w-md">
-        {/* Close button */}
-        <button
-          onClick={() => setIsVisible(false)}
-          className="absolute top-3 right-3 text-white/60 hover:text-white/90 transition-colors"
-        >
-          <X className="h-4 w-4" />
-        </button>
+    <div className="fixed bottom-6 right-6 z-50 animate-in slide-in-from-bottom-4 duration-300">
+      <Card className="w-96 bg-white/5 backdrop-blur-xs border-transparent shadow-sm">
+        <div className="p-5">
+          {/* Name */}
+          <h3 className="text-lg font-semibold text-white mb-1 truncate">
+            {name}
+          </h3>
 
-        {/* Content */}
-        <div className="flex items-start gap-3">
-          <div className="flex-shrink-0 h-10 w-10 rounded-full bg-accent/20 flex items-center justify-center">
-            <User className="h-5 w-5 text-accent" />
+          {/* Relationship badge */}
+          <div className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-400/15 text-blue-100 border border-blue-300/20 mb-2">
+            {relationship}
           </div>
 
-          <div className="flex-1 space-y-1">
-            <div className="flex items-baseline gap-2">
-              <h3 className="text-white font-semibold text-base">{personInfo.name}</h3>
-              <span className="text-white/50 text-sm">{personInfo.relationship}</span>
-            </div>
-            <p className="text-white/70 text-sm leading-relaxed">{personInfo.description}</p>
-          </div>
+          {/* Description */}
+          <p className="text-sm text-white/90 leading-relaxed line-clamp-2">
+            {description}
+          </p>
         </div>
-      </div>
+      </Card>
     </div>
   )
 }
