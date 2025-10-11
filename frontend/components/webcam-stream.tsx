@@ -35,7 +35,7 @@ export default function WebcamStream() {
   const [eventSource, setEventSource] = useState<EventSource | null>(null)
   const [isRayBanMode, setIsRayBanMode] = useState(false)
 
-  const BACKEND_URL = "http://localhost:8000"
+  const BACKEND_URL = "http://localhost:8002"
 
   const { detectedFaces, isLoading: isFaceDetectionLoading, error: faceDetectionError } = useFaceDetection(
     videoRef.current,
@@ -93,19 +93,18 @@ export default function WebcamStream() {
 
   const connectSSE = () => {
     try {
-      const sessionId = Math.random().toString(36).substring(7)
-      const es = new EventSource(`${BACKEND_URL}/events?session_id=${sessionId}`)
+      const es = new EventSource(`${BACKEND_URL}/stream/inference`)
 
-      console.log('[SSE] Connecting to:', `${BACKEND_URL}/events`)
+      console.log('[SSE] Connecting to:', `${BACKEND_URL}/stream/inference`)
 
       es.onopen = () => {
         console.log('[SSE] Connected')
       }
 
-      es.onmessage = (event) => {
+      es.addEventListener('inference', (event) => {
         try {
           const message = JSON.parse(event.data)
-          console.log('[SSE] Received:', message)
+          console.log('[SSE] Received inference event:', message)
 
           if (message.name && message.description && message.relationship) {
             setLatestPersonData({
@@ -117,7 +116,7 @@ export default function WebcamStream() {
         } catch (err) {
           console.error('[SSE] Error parsing message:', err)
         }
-      }
+      })
 
       es.onerror = (error) => {
         console.error('[SSE] Error:', error)
