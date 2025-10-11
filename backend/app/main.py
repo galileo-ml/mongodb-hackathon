@@ -7,7 +7,6 @@ import logging
 import os
 from datetime import datetime
 from pathlib import Path
-from time import monotonic
 from typing import Set
 from uuid import uuid4
 
@@ -17,16 +16,8 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
-from .audio import (
-    AdaptiveDenoiser,
-    AudioPipeline,
-    PipelineConfig,
-    PyannoteSpeakerEmbedder,
-    SegmenterConfig,
-    WebRTCVADSegmenter,
-)
+from .audio import AdaptiveDenoiser, AudioPipeline, PipelineConfig
 from .core import AudioChunk
-from .services.vector_store import MongoDBVectorStore
 
 logger = logging.getLogger("webrtc")
 if not logger.handlers:
@@ -50,73 +41,11 @@ FRONTEND_INDEX = ROOT_DIR / "dummy_frontend" / "index.html"
 load_dotenv(ROOT_DIR / ".env")
 os.environ.setdefault("TORCHAUDIO_PYTHON_ONLY", "1")
 
-vector_store = MongoDBVectorStore(
-    uri="mongodb+srv://stub.example.com",
-    database="diarization",
-    collection="speaker_embeddings",
-)
-
 pipeline_config = PipelineConfig()
-segmenter = WebRTCVADSegmenter(
-    SegmenterConfig(
-        mode=pipeline_config.vad_mode,
-        min_speech_ms=pipeline_config.vad_min_speech_ms,
-        min_silence_ms=pipeline_config.vad_min_silence_ms,
-    )
-)
-
 audio_pipeline = AudioPipeline(
     denoiser=AdaptiveDenoiser(),
-    segmenter=segmenter,
-    embedder=PyannoteSpeakerEmbedder(),
-    vector_store=vector_store,
     config=pipeline_config,
 )
-
-METRIC_INTERVAL_SECONDS = 30
-_metrics_task: asyncio.Task | None = None
-_STAT_COLOR = "\033[38;5;45m"
-_VALUE_COLOR = "\033[38;5;214m"
-_RESET_COLOR = "\033[0m"
-
-
-async def log_vector_metrics_periodically() -> None:
-    try:
-        while True:
-            await asyncio.sleep(METRIC_INTERVAL_SECONDS)
-            lookups, unique_matches, total_embeddings = await vector_store.snapshot_metrics()
-            logger.info(
-                "%sVector store stats%s lookups=%s%d%s unique_speakers=%s%d%s total_embeddings=%s%d%s",
-                _STAT_COLOR,
-                _RESET_COLOR,
-                _VALUE_COLOR,
-                lookups,
-                _RESET_COLOR,
-                _VALUE_COLOR,
-                unique_matches,
-                _RESET_COLOR,
-                _VALUE_COLOR,
-                total_embeddings,
-                _RESET_COLOR,
-            )
-    except asyncio.CancelledError:
-        lookups, unique_matches, total_embeddings = await vector_store.snapshot_metrics()
-        if lookups or unique_matches:
-            logger.info(
-                "%sVector store stats (final)%s lookups=%s%d%s unique_speakers=%s%d%s total_embeddings=%s%d%s",
-                _STAT_COLOR,
-                _RESET_COLOR,
-                _VALUE_COLOR,
-                lookups,
-                _RESET_COLOR,
-                _VALUE_COLOR,
-                unique_matches,
-                _RESET_COLOR,
-                _VALUE_COLOR,
-                total_embeddings,
-                _RESET_COLOR,
-            )
-        raise
 
 class SDPModel(BaseModel):
     sdp: str
@@ -125,15 +54,10 @@ class SDPModel(BaseModel):
 
 @app.on_event("startup")
 async def on_startup() -> None:
-    global _metrics_task
-    await vector_store.connect()
-    logger.info("Audio pipeline initialized with MongoDB vector store stub")
     try:
         await audio_pipeline.warm_whisper()
     except Exception as exc:  # noqa: BLE001
         logger.warning("Whisper warm-up failed: %s", exc)
-    if _metrics_task is None or _metrics_task.done():
-        _metrics_task = asyncio.create_task(log_vector_metrics_periodically())
 
 
 @app.get("/")
@@ -239,14 +163,6 @@ async def offer(session: SDPModel) -> SDPModel:
 
 @app.on_event("shutdown")
 async def on_shutdown() -> None:
-    global _metrics_task
-    if _metrics_task is not None:
-        _metrics_task.cancel()
-        try:
-            await _metrics_task
-        except asyncio.CancelledError:  # noqa: PERF203 - expected
-            pass
-        _metrics_task = None
     coros = [pc.close() for pc in pcs]
     await asyncio.gather(*coros, return_exceptions=True)
     pcs.clear()
