@@ -2,7 +2,6 @@
 
 import { useEffect, useState } from "react"
 import { Card } from "@/components/ui/card"
-import { Button } from "@/components/ui/button"
 
 interface FaceNotificationProps {
   faceId: string
@@ -52,30 +51,27 @@ export function FaceNotification({
         top: `${top}px`,
       }}
     >
-      <div className="flex justify-end mb-2 animate-in slide-in-from-bottom-2 duration-500 delay-150">
-        <Button
-          size="sm"
-          className="bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-medium px-3 py-1.5 h-auto rounded-md shadow-lg"
-        >
-          What should I say?
-        </Button>
+      <div className="flex items-center gap-3 mb-3">
+        <h4 className="text-3xl font-bold text-white bg-gray-800/60 px-4 py-2 rounded-lg backdrop-blur-sm">
+          {name}
+        </h4>
+
+        {relationship && (
+          <div className="inline-flex items-center px-3 py-1.5 rounded-lg text-base font-bold bg-amber-500 text-white shadow-lg">
+            {relationship}
+          </div>
+        )}
       </div>
 
-      <Card className="w-64 bg-gray-900/40 backdrop-blur-xs border-gray-700/30 shadow-sm">
-        <div className="p-3">
-          <div className="flex items-center gap-2 mb-1">
-            <h4 className="text-base font-bold text-white bg-white/10 px-2 py-1 rounded inline-block">{name}</h4>
-
-            {relationship && (
-              <div className="inline-flex items-center px-1.5 py-0.5 rounded-full text-[9px] font-normal bg-amber-500/10 text-amber-400/80 border border-amber-500/20">
-                {relationship}
-              </div>
-            )}
+      {description && (
+        <Card className="w-[29rem] bg-gray-900/40 backdrop-blur-xs border-gray-700/30 shadow-sm">
+          <div className="px-5 py-1">
+            <p className="text-base text-white/90 leading-relaxed line-clamp-3">
+              {description}
+            </p>
           </div>
-
-          {description && <p className="text-xs text-white/90 leading-relaxed line-clamp-2 mt-2.5">{description}</p>}
-        </div>
-      </Card>
+        </Card>
+      )}
     </div>
   )
 }

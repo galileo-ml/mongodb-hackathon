@@ -135,29 +135,29 @@ async def offer(session: SDPModel) -> SDPModel:
         # Mock person detection notifications with structured data
         mock_people = [
             {
-                "name": "John Doe",
-                "description": "Senior Software Engineer at TechCorp",
-                "relationship": "Former colleague"
+                "name": "Sarah",
+                "description": "Last spoke 3 days ago about her promotion and the grandchildren visiting",
+                "relationship": "Your daughter"
             },
             {
-                "name": "Jane Smith",
-                "description": "Project Manager specializing in agile methodologies",
-                "relationship": "Worked together on Q3 2024 project"
+                "name": "Michael",
+                "description": "Visited yesterday with groceries and talked about his camping trip",
+                "relationship": "Your son"
             },
             {
-                "name": "Bob Johnson",
-                "description": "Tech Conference Speaker and Open Source Contributor",
-                "relationship": "Met at DevCon 2024"
+                "name": "Robert",
+                "description": "Last week you discussed the mystery novel and college memories",
+                "relationship": "Your friend from book club"
             },
             {
-                "name": "Alice Williams",
-                "description": "Data Scientist at StartupXYZ",
-                "relationship": "College roommate, haven't seen in 3 years"
+                "name": "Emily",
+                "description": "Called last month about the family reunion plans",
+                "relationship": "Your niece"
             },
             {
-                "name": "Dr. Michael Brown",
-                "description": "Computer Science Professor at State University",
-                "relationship": "Former academic advisor"
+                "name": "Dr. Patricia Chen",
+                "description": "Your last appointment was two weeks ago for the checkup",
+                "relationship": "Your doctor"
             },
         ]
 
@@ -177,7 +177,8 @@ async def offer(session: SDPModel) -> SDPModel:
                         person_data = PersonData(
                             name=person_dict["name"],
                             description=person_dict["description"],
-                            relationship=person_dict["relationship"]
+                            relationship=person_dict["relationship"],
+                            person_id=f"person_{(notification_index % len(mock_people)) + 1:03d}"
                         )
                         await broadcast_person(person_data)
                         logger.info("📢 Sent person notification: %s (%s)", person_data.name, person_data.relationship)
