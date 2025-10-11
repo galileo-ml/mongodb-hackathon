@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react"
 import { Card } from "@/components/ui/card"
+import { Button } from "@/components/ui/button"
 
 interface FaceNotificationProps {
   faceId: string
@@ -51,23 +52,28 @@ export function FaceNotification({
         top: `${top}px`,
       }}
     >
-      <Card className="w-64 bg-white/5 backdrop-blur-xs border-transparent shadow-sm">
+      <div className="flex justify-end mb-2 animate-in slide-in-from-bottom-2 duration-500 delay-150">
+        <Button
+          size="sm"
+          className="bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-medium px-3 py-1.5 h-auto rounded-md shadow-lg"
+        >
+          What should I say?
+        </Button>
+      </div>
+
+      <Card className="w-64 bg-gray-900/40 backdrop-blur-xs border-gray-700/30 shadow-sm">
         <div className="p-3">
-          <h4 className="text-sm font-semibold text-white mb-1 truncate">
-            {name}
-          </h4>
+          <div className="flex items-center gap-2 mb-1">
+            <h4 className="text-base font-bold text-white bg-white/10 px-2 py-1 rounded inline-block">{name}</h4>
 
-          {relationship && (
-            <div className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-blue-400/15 text-blue-100 border border-blue-300/20 mb-1.5">
-              {relationship}
-            </div>
-          )}
+            {relationship && (
+              <div className="inline-flex items-center px-1.5 py-0.5 rounded-full text-[9px] font-normal bg-amber-500/10 text-amber-400/80 border border-amber-500/20">
+                {relationship}
+              </div>
+            )}
+          </div>
 
-          {description && (
-            <p className="text-xs text-white/90 leading-relaxed line-clamp-2">
-              {description}
-            </p>
-          )}
+          {description && <p className="text-xs text-white/90 leading-relaxed line-clamp-2 mt-2.5">{description}</p>}
         </div>
       </Card>
     </div>
