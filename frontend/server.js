@@ -25,7 +25,8 @@ app.prepare().then(() => {
   // Create WebSocket server
   const wss = new WebSocketServer({ noServer: true })
 
-  // Handle WebSocket upgrade
+  // Handle WebSocket upgrade (forward non-/api/ws to Next for HMR)
+  const nextUpgradeHandler = app.getUpgradeHandler()
   server.on('upgrade', (request, socket, head) => {
     const { pathname } = parse(request.url)
 
@@ -34,7 +35,8 @@ app.prepare().then(() => {
         wss.emit('connection', ws, request)
       })
     } else {
-      socket.destroy()
+      // Let Next.js handle upgrades like /_next/webpack-hmr
+      nextUpgradeHandler(request, socket, head)
     }
   })
 
