@@ -45,7 +45,7 @@ export function FaceNotification({
 
   return (
     <div
-      className="absolute z-40 animate-in slide-in-from-left-2 duration-300"
+      className="absolute z-40 animate-in slide-in-from-bottom-2 fade-in duration-300"
       style={{
         left: `${left}px`,
         top: `${top}px`,

@@ -307,7 +307,7 @@ export default function WebcamStream() {
           const person = facePersonData.get(notification!.face.id)
           return (
             <FaceNotification
-              key={notification!.face.id}
+              key={`${notification!.face.id}-${person?.name || 'unknown'}`}
               faceId={notification!.face.id}
               left={notification!.position.left}
               top={notification!.position.top}
