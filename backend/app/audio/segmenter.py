@@ -18,10 +18,10 @@ logger = logging.getLogger("webrtc.audio.segmenter")
 @dataclass
 class SegmenterConfig:
     mode: int = 3  # 0=quality, 3=aggressive
-    frame_duration_ms: int = 20
+    frame_duration_ms: int = 30
     target_sample_rate: int = 16000
-    min_speech_ms: int = 400
-    min_silence_ms: int = 400
+    min_speech_ms: int = 600
+    min_silence_ms: int = 700
 
 
 class WebRTCVADSegmenter:
