@@ -16,6 +16,8 @@ from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
+from app.contracts import PersonData
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("webrtc")
 logger.setLevel(logging.INFO)
@@ -34,42 +36,36 @@ class SDPModel(BaseModel):
     type: str
 
 
-class AIEvent(BaseModel):
-    type: str  # "ai-response", "face-detected", "speaker-identified", etc.
-    data: dict
-    timestamp: str
-
-
 # ==========================================
-# Helper: Broadcast AI Events
+# Helper: Broadcast Person Data
 # ==========================================
 
-async def broadcast_event(event: AIEvent):
-    """Broadcast event to all SSE and WebSocket connections."""
-    event_json = event.model_dump_json()
-    
+async def broadcast_person(person: PersonData):
+    """Broadcast person detection to all SSE and WebSocket connections."""
+    person_json = person.model_dump_json()
+
     # Send to all SSE queues
     dead_queues = []
     for session_id, queue in event_queues.items():
         try:
-            await queue.put(event)
+            await queue.put(person)
         except Exception as e:
             logger.error(f"Failed to send to SSE queue {session_id}: {e}")
             dead_queues.append(session_id)
-    
+
     # Cleanup dead queues
     for session_id in dead_queues:
         event_queues.pop(session_id, None)
-    
+
     # Send to all WebSocket connections
     dead_ws = []
     for ws in active_websockets:
         try:
-            await ws.send_text(event_json)
+            await ws.send_text(person_json)
         except Exception as e:
             logger.error(f"Failed to send to WebSocket: {e}")
             dead_ws.append(ws)
-    
+
     # Cleanup dead WebSockets
     for ws in dead_ws:
         active_websockets.discard(ws)
@@ -133,48 +129,80 @@ async def offer(session: SDPModel) -> SDPModel:
 
         frame_count = 0
         last_logged = monotonic()
+        last_notification = monotonic()
+        notification_index = 0
+
+        # Mock person detection notifications with structured data
+        mock_people = [
+            {
+                "name": "John Doe",
+                "description": "Senior Software Engineer at TechCorp",
+                "relationship": "Former colleague"
+            },
+            {
+                "name": "Jane Smith",
+                "description": "Project Manager specializing in agile methodologies",
+                "relationship": "Worked together on Q3 2024 project"
+            },
+            {
+                "name": "Bob Johnson",
+                "description": "Tech Conference Speaker and Open Source Contributor",
+                "relationship": "Met at DevCon 2024"
+            },
+            {
+                "name": "Alice Williams",
+                "description": "Data Scientist at StartupXYZ",
+                "relationship": "College roommate, haven't seen in 3 years"
+            },
+            {
+                "name": "Dr. Michael Brown",
+                "description": "Computer Science Professor at State University",
+                "relationship": "Former academic advisor"
+            },
+        ]
 
         async def consume() -> None:
-            nonlocal frame_count, last_logged
+            nonlocal frame_count, last_logged, last_notification, notification_index
             while True:
                 try:
                     frame = await track.recv()
                     frame_count += 1
                     now = monotonic()
                     elapsed = now - last_logged
-                    
-                    # TODO: Process frames here and generate AI events
-                    # Example: Every 30 frames, send a mock AI response
-                    if frame_count % 30 == 0:
-                        mock_event = AIEvent(
-                            type="ai-response",
-                            data={
-                                "llmResponse": f"Processed {frame_count} frames from {track.kind} track",
-                                "frameCount": frame_count,
-                                "trackKind": track.kind
-                            },
-                            timestamp=datetime.utcnow().isoformat()
+                    notification_elapsed = now - last_notification
+
+                    # Send mock person notifications every 5 seconds (only for video track)
+                    if track.kind == "video" and notification_elapsed >= 5:
+                        person_dict = mock_people[notification_index % len(mock_people)]
+                        person_data = PersonData(
+                            name=person_dict["name"],
+                            description=person_dict["description"],
+                            relationship=person_dict["relationship"]
                         )
-                        await broadcast_event(mock_event)
-                    
-                    if elapsed >= 1:
+                        await broadcast_person(person_data)
+                        logger.info("📢 Sent person notification: %s (%s)", person_data.name, person_data.relationship)
+                        notification_index += 1
+                        last_notification = now
+
+                    # Log data reception every 5 seconds
+                    if elapsed >= 5:
                         if track.kind == "video":
                             fps = frame_count / elapsed
                             logger.info(
-                                "Peer %s video: ~%.1f fps, frame pts=%s, size=%sx%s",
+                                "✅ Receiving video data from Peer %s: ~%.1f fps, %d frames in %.1fs (size=%sx%s)",
                                 id(pc),
                                 fps,
-                                getattr(frame, "pts", "?"),
+                                frame_count,
+                                elapsed,
                                 getattr(frame, "width", "?"),
                                 getattr(frame, "height", "?"),
                             )
                         else:
                             logger.info(
-                                "Peer %s audio: %d chunks received in %.2fs (last pts=%s)",
+                                "✅ Receiving audio data from Peer %s: %d chunks in %.1fs",
                                 id(pc),
                                 frame_count,
                                 elapsed,
-                                getattr(frame, "pts", "?"),
                             )
                         frame_count = 0
                         last_logged = now
@@ -228,20 +256,12 @@ async def events_stream(session_id: str = "default"):
     async def event_generator():
         try:
             logger.info(f"📡 SSE client connected: {session_id}")
-            
-            # Send initial connection event
-            init_event = AIEvent(
-                type="connection",
-                data={"message": "Connected to event stream"},
-                timestamp=datetime.utcnow().isoformat()
-            )
-            yield f"data: {init_event.model_dump_json()}\n\n"
-            
-            # Stream events from queue
+
+            # Stream person data from queue
             while True:
-                event = await queue.get()
-                yield f"data: {event.model_dump_json()}\n\n"
-                
+                person_data = await queue.get()
+                yield f"data: {person_data.model_dump_json()}\n\n"
+
         except asyncio.CancelledError:
             logger.info(f"📡 SSE client disconnected: {session_id}")
             event_queues.pop(session_id, None)
@@ -278,30 +298,13 @@ async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
     active_websockets.add(websocket)
     logger.info(f"🔌 WebSocket client connected (total: {len(active_websockets)})")
-    
+
     try:
-        # Send connection confirmation
-        init_event = AIEvent(
-            type="connection",
-            data={"message": "Connected to WebSocket"},
-            timestamp=datetime.utcnow().isoformat()
-        )
-        await websocket.send_text(init_event.model_dump_json())
-        
         # Listen for incoming messages (optional)
         while True:
             data = await websocket.receive_text()
             logger.info(f"📩 Received from client: {data}")
-            
-            # Echo or process client messages if needed
-            # For now, just acknowledge
-            response = AIEvent(
-                type="ack",
-                data={"message": "Message received"},
-                timestamp=datetime.utcnow().isoformat()
-            )
-            await websocket.send_text(response.model_dump_json())
-            
+
     except WebSocketDisconnect:
         logger.info("🔌 WebSocket client disconnected")
     except Exception as e:
