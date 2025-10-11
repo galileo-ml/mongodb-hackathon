@@ -128,6 +128,10 @@ async def on_startup() -> None:
     global _metrics_task
     await vector_store.connect()
     logger.info("Audio pipeline initialized with MongoDB vector store stub")
+    try:
+        await audio_pipeline.warm_whisper()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Whisper warm-up failed: %s", exc)
     if _metrics_task is None or _metrics_task.done():
         _metrics_task = asyncio.create_task(log_vector_metrics_periodically())
 
@@ -201,28 +205,10 @@ async def offer(session: SDPModel) -> SDPModel:
         else:
 
             async def consume_video() -> None:
-                frame_count = 0
-                last_logged = monotonic()
                 while True:
                     try:
-                        frame = await track.recv()
-                        frame_count += 1
-                        now = monotonic()
-                        elapsed = now - last_logged
-                        if elapsed >= 1:
-                            fps = frame_count / elapsed
-                            logger.info(
-                                "Peer %s video: ~%.1f fps, frame pts=%s, size=%sx%s",
-                                id(pc),
-                                fps,
-                                getattr(frame, "pts", "?"),
-                                getattr(frame, "width", "?"),
-                                getattr(frame, "height", "?"),
-                            )
-                            frame_count = 0
-                            last_logged = now
-                    except Exception as exc:  # noqa: BLE001
-                        logger.info("Video track on %s ended: %s", id(pc), exc)
+                        await track.recv()
+                    except Exception:  # noqa: BLE001
                         break
 
             asyncio.create_task(consume_video())

@@ -8,11 +8,11 @@
    PYANNOTE_AUTH_TOKEN=hf_...
    ```
    The application automatically loads this file on startup.
-3. Install dependencies and launch the backend:
+3. Install dependencies (Whisper requires FFmpeg on your system) and launch the backend:
    ```bash
    uv sync
    uv run -- uvicorn backend.app.main:app --reload
    ```
 4. Visit `http://localhost:8000/`, allow camera/mic access, and monitor the server logs. You’ll see WebRTC-VAD segments, 10 s conversation boundaries, local-speaker reuse without vector DB hits, and periodic vector-store stats.
 
-The stack uses FastAPI + aiortc for WebRTC ingest, pyannote.audio for speaker embeddings, and stubs for the future MongoDB Atlas vector store.
+The stack uses FastAPI + aiortc for WebRTC ingest, pyannote.audio for speaker embeddings, Whisper for end-of-conversation snippets, and stubs for the future MongoDB Atlas vector store.
