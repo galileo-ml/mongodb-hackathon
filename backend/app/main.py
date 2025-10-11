@@ -13,11 +13,12 @@ from uuid import uuid4
 from aiortc import RTCPeerConnection, RTCSessionDescription
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
 from .audio import AdaptiveDenoiser, AudioPipeline, PipelineConfig
 from .core import AudioChunk
+from .services.conversation_stream import ConversationEventBus
 
 logger = logging.getLogger("webrtc")
 if not logger.handlers:
@@ -42,9 +43,11 @@ load_dotenv(ROOT_DIR / ".env")
 os.environ.setdefault("TORCHAUDIO_PYTHON_ONLY", "1")
 
 pipeline_config = PipelineConfig()
+conversation_bus = ConversationEventBus()
 audio_pipeline = AudioPipeline(
     denoiser=AdaptiveDenoiser(),
     config=pipeline_config,
+    conversation_bus=conversation_bus,
 )
 
 class SDPModel(BaseModel):
@@ -167,3 +170,24 @@ async def on_shutdown() -> None:
     await asyncio.gather(*coros, return_exceptions=True)
     pcs.clear()
     logger.info("Shutdown complete; closed all peer connections")
+
+
+@app.get("/stream/conversation")
+async def stream_conversation() -> StreamingResponse:
+    """Server-Sent Events stream of completed conversations."""
+
+    async def event_generator():
+        queue = await conversation_bus.subscribe()
+        try:
+            while True:
+                try:
+                    event = await queue.get()
+                except asyncio.CancelledError:
+                    break
+                payload = event.model_dump_json()
+                yield f"event: conversation\ndata: {payload}\n\n"
+        finally:
+            await conversation_bus.unsubscribe(queue)
+
+    headers = {"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
+    return StreamingResponse(event_generator(), media_type="text/event-stream", headers=headers)

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 
@@ -42,3 +44,20 @@ class VectorSimilarityResult(BaseModel):
     matched_person_id: str | None
     score: float
     embedding: SpeakerEmbedding
+
+
+class ConversationUtterance(BaseModel):
+    """Single utterance in a conversation transcript."""
+
+    speaker: str
+    text: str
+
+
+class ConversationEvent(BaseModel):
+    """Event emitted when a conversation ends."""
+
+    event_type: Literal["CONVERSATION_END"] = "CONVERSATION_END"
+    conversation_id: str
+    session_id: str
+    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    utterances: list[ConversationUtterance] = Field(default_factory=list)

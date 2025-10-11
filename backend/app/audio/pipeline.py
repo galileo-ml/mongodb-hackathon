@@ -12,7 +12,8 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 import torch
 
-from ..core import AudioChunk
+from ..core import AudioChunk, ConversationEvent, ConversationUtterance
+from ..services.conversation_stream import ConversationEventBus
 from .denoiser import AdaptiveDenoiser
 
 try:  # pragma: no cover - optional dependency
@@ -92,6 +93,7 @@ class AudioPipeline:
         self,
         denoiser: AdaptiveDenoiser,
         config: PipelineConfig | None = None,
+        conversation_bus: ConversationEventBus | None = None,
     ) -> None:
         self.denoiser = denoiser
         self.config = config or PipelineConfig()
@@ -104,6 +106,7 @@ class AudioPipeline:
         self._speaker_lock = asyncio.Lock()
         self._next_speaker_index = 1
         self._pyannote_auth_token = os.getenv("PYANNOTE_AUTH_TOKEN")
+        self._conversation_bus = conversation_bus
 
         if PyannoteInference is None:
             logger.warning(
@@ -263,6 +266,7 @@ class AudioPipeline:
 
         transcript = await self._transcribe_audio(audio)
         await self._assign_speakers(state, audio, transcript)
+        await self._publish_conversation_event(state, session_id, transcript)
         if transcript:
             self._print_transcript(state.conversation_id, transcript)
         else:
@@ -335,6 +339,43 @@ class AudioPipeline:
             speaker_label = segment.speaker or "Speaker ?"
             line = f"[{timestamp}] {speaker_label}: {segment.text}"
             print(f"\033[31m{line}\033[0m", flush=True)
+
+    async def _publish_conversation_event(
+        self,
+        state: ConversationState,
+        session_id: str,
+        snippets: List[TranscriptSegment],
+    ) -> None:
+        if not snippets or self._conversation_bus is None:
+            return
+
+        utterances = [
+            ConversationUtterance(
+                speaker=segment.speaker or "Speaker ?",
+                text=segment.text,
+            )
+            for segment in snippets
+        ]
+
+        event = ConversationEvent(
+            conversation_id=state.conversation_id,
+            session_id=session_id,
+            utterances=utterances,
+        )
+
+        try:
+            await self._conversation_bus.publish(event)
+            logger.info(
+                "Published conversation event %s with %d utterances",
+                state.conversation_id,
+                len(utterances),
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.exception(
+                "Failed to publish conversation event %s: %s",
+                state.conversation_id,
+                exc,
+            )
 
     async def _load_whisper_model(self):
         async with self._whisper_lock:
