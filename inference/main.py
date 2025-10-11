@@ -10,6 +10,12 @@ import httpx
 from fastapi import FastAPI
 from sse_starlette.sse import EventSourceResponse
 
+from database import create_person, get_person_by_id, update_person_context
+from fireworks_client import (
+    aggregate_conversation_context,
+    generate_ar_description,
+    infer_new_person_details,
+)
 from models import ConversationEvent, InferenceResult
 
 logging.basicConfig(level=logging.INFO)
@@ -20,88 +26,118 @@ app = FastAPI(title="Inference Service - AR Glasses")
 # Queue to hold processed results for streaming to clients
 result_queue: asyncio.Queue[InferenceResult] = asyncio.Queue()
 
-# Mock "database" of people (mutable so we can update last interactions)
-MOCK_PERSON_DATA = {
-    "person_001": {
-        "name": "Sarah",
-        "relationship": "Your daughter",
-        "last_interaction": "Last spoke 3 days ago about her promotion and the grandchildren visiting"
-    },
-    "person_002": {
-        "name": "Michael",
-        "relationship": "Your son",
-        "last_interaction": "Visited yesterday with groceries and talked about his camping trip"
-    },
-    "person_003": {
-        "name": "Robert",
-        "relationship": "Your friend from book club",
-        "last_interaction": "Last week you discussed the mystery novel and college memories"
-    }
-}
-
 # Configuration
 METADATA_SERVICE_URL = "http://localhost:8001/stream/conversation"
 
 
 def handle_person_detected(event: ConversationEvent) -> InferenceResult:
     """
-    Handle PERSON_DETECTED event - return AR display information.
+    Handle PERSON_DETECTED event - return AR display information from MongoDB.
     """
-    # Get person data (name, relationship, last interaction)
-    person_data = MOCK_PERSON_DATA.get(event.person_id, {
-        "name": "Unknown Person",
-        "relationship": "Unknown relationship",
-        "last_interaction": "No previous interactions"
-    })
+    # Query MongoDB for person data
+    person_doc = get_person_by_id(event.person_id)
 
-    result = InferenceResult(
-        person_id=event.person_id,
-        name=person_data["name"],
-        relationship=person_data["relationship"],
-        description=person_data["last_interaction"]
-    )
+    if person_doc:
+        result = InferenceResult(
+            person_id=event.person_id,
+            name=person_doc["name"],
+            relationship=person_doc["relationship"],
+            description=person_doc["cached_description"]
+        )
+        logger.info(f"Person detected: {person_doc['name']} ({event.person_id})")
+    else:
+        # Person not found in database
+        result = InferenceResult(
+            person_id=event.person_id,
+            name="Unknown Person",
+            relationship="Unknown relationship",
+            description="No previous interactions"
+        )
+        logger.warning(f"Person not found in database: {event.person_id}")
 
-    logger.info(f"Person detected: {person_data['name']} ({event.person_id})")
     return result
 
 
-def handle_conversation_end(event: ConversationEvent) -> None:
+async def handle_conversation_end(event: ConversationEvent) -> None:
     """
     Handle CONVERSATION_END event - store conversation for future reference.
-    Updates the person's last_interaction field.
+
+    Two scenarios:
+    1. Existing person: Update their context and description
+    2. New person: Infer their details from conversation and create entry
+
+    Uses Fireworks.ai models for both scenarios.
     """
     if not event.conversation:
         logger.warning(f"CONVERSATION_END event for {event.person_id} has no conversation data")
         return
 
-    # Update person's last interaction in mock database
-    if event.person_id in MOCK_PERSON_DATA:
-        # In production, this would use LLM to generate a summary
-        # For now, create simple summary from conversation structure
-        num_utterances = len(event.conversation)
+    # Get current person data from MongoDB
+    person_doc = get_person_by_id(event.person_id)
 
-        # Extract some topic keywords from conversation
-        all_text = " ".join([u.text.lower() for u in event.conversation])
-        topics = []
-        if any(word in all_text for word in ["promotion", "job", "work"]):
-            topics.append("work")
-        if any(word in all_text for word in ["kids", "children", "grandchildren"]):
-            topics.append("family")
-        if any(word in all_text for word in ["visit", "coming", "see you"]):
-            topics.append("upcoming visit")
+    # Scenario 1: NEW PERSON - Infer details from conversation
+    if not person_doc:
+        logger.info(f"🆕 NEW PERSON DETECTED: {event.person_id}")
+        logger.info(f"Analyzing first conversation ({len(event.conversation)} utterances) to infer details...")
 
-        if topics:
-            topic_str = " and ".join(topics)
-            summary = f"Just talked about {topic_str}"
+        try:
+            # Call Fireworks Model #3: Infer person details
+            inferred_details = await infer_new_person_details(event.conversation)
+
+            # Create new person in MongoDB
+            new_person = create_person(
+                person_id=event.person_id,
+                name=inferred_details["name"],
+                relationship=inferred_details["relationship"],
+                aggregated_context=inferred_details["aggregated_context"],
+                cached_description=inferred_details["cached_description"]
+            )
+
+            logger.info(f"✓ Created new person: {inferred_details['name']} ({inferred_details['relationship']})")
+            logger.info(f"  Description: {inferred_details['cached_description']}")
+            return
+
+        except Exception as e:
+            logger.error(f"Error inferring new person details: {e}")
+            logger.error(f"Conversation will not be stored for {event.person_id}")
+            return
+
+    # Scenario 2: EXISTING PERSON - Update with new conversation
+    logger.info(f"Processing conversation end for {person_doc['name']} ({event.person_id})")
+    logger.info(f"Conversation: {len(event.conversation)} utterances")
+
+    try:
+        # Call Fireworks Model #1: Aggregate conversation context
+        updated_context = await aggregate_conversation_context(
+            person_name=person_doc["name"],
+            current_context=person_doc["aggregated_context"],
+            new_conversation=event.conversation
+        )
+
+        # Call Fireworks Model #2: Generate AR description
+        new_description = await generate_ar_description(
+            person_name=person_doc["name"],
+            relationship=person_doc["relationship"],
+            aggregated_context=updated_context
+        )
+
+        # Update MongoDB with AI-generated results
+        updated = update_person_context(
+            person_id=event.person_id,
+            aggregated_context=updated_context,
+            cached_description=new_description
+        )
+
+        if updated:
+            logger.info(f"✓ Successfully updated {person_doc['name']} with AI-generated content")
+            logger.info(f"  New context: {updated_context[:100]}...")
+            logger.info(f"  New description: {new_description}")
         else:
-            summary = f"Just had a conversation ({num_utterances} messages)"
+            logger.error(f"Failed to update MongoDB for person {event.person_id}")
 
-        MOCK_PERSON_DATA[event.person_id]["last_interaction"] = summary
-
-        logger.info(f"Stored conversation for {MOCK_PERSON_DATA[event.person_id]['name']} ({event.person_id})")
-        logger.info(f"Conversation: {num_utterances} utterances")
-    else:
-        logger.warning(f"Unknown person {event.person_id} - conversation not stored")
+    except Exception as e:
+        logger.error(f"Error processing conversation with Fireworks.ai: {e}")
+        logger.error(f"Conversation will not be stored for {event.person_id}")
 
 
 async def consume_metadata_stream():
@@ -138,7 +174,7 @@ async def consume_metadata_stream():
                                     await result_queue.put(result)
 
                                 elif event.event_type == "CONVERSATION_END":
-                                    handle_conversation_end(event)
+                                    await handle_conversation_end(event)
                                     # No result to stream - just storage
 
                             except json.JSONDecodeError as e:

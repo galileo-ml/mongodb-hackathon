@@ -18,6 +18,16 @@ app = FastAPI(title="Mock Metadata Service - Two Event Types")
 
 # Mock conversation transcripts for each person - structured arrays
 MOCK_CONVERSATIONS = {
+    "person_004": [
+        [
+            ConversationUtterance(speaker="person_004", text="Hi Mom, it's Lisa! How are you doing today?"),
+            ConversationUtterance(speaker="patient", text="I'm okay... who are you?"),
+            ConversationUtterance(speaker="person_004", text="It's Lisa, your daughter. I just got promoted to head nurse at the hospital!"),
+            ConversationUtterance(speaker="patient", text="That's wonderful news!"),
+            ConversationUtterance(speaker="person_004", text="I'll be working the day shift now, so I can visit more often."),
+            ConversationUtterance(speaker="patient", text="I'd like that very much."),
+        ],
+    ],
     "person_001": [
         [
             ConversationUtterance(speaker="person_001", text="Hi dad, how are you feeling today?"),
@@ -83,8 +93,8 @@ async def generate_conversation_events():
 
     while True:
         try:
-            # Pick a person
-            person_id = random.choice(["person_001", "person_002", "person_003"])
+            # Pick a person (including the new person_004)
+            person_id = random.choice(["person_001", "person_002", "person_003", "person_004"])
 
             # First: Send PERSON_DETECTED event
             person_detected_event = ConversationEvent(

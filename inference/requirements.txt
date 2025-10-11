@@ -10,3 +10,12 @@ httpx==0.27.0
 
 # Data validation
 pydantic==2.6.3
+
+# MongoDB
+pymongo[srv]==4.6.1
+
+# Environment variables
+python-dotenv==1.0.0
+
+# Fireworks.ai (OpenAI-compatible API)
+openai==1.12.0

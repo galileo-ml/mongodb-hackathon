@@ -1,0 +1,4 @@
+fireworks-ai
+pydantic
+python-dotenv
+requests
