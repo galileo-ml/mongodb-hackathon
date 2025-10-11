@@ -1,0 +1,22 @@
+# FastAPI and server
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+
+# WebRTC support
+aiortc==1.10.0
+av==14.0.1
+
+# Core dependencies
+pydantic==2.10.5
+pydantic-settings==2.7.1
+python-multipart==0.0.20
+
+# ASGI server extras (included in uvicorn[standard])
+# - uvloop (faster event loop)
+# - httptools (faster HTTP parsing)
+# - websockets (WebSocket support)
+# - watchfiles (auto-reload)
+
+# Additional utilities (optional but useful)
+python-dotenv==1.0.1  # For .env file support
+
