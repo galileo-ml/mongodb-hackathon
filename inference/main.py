@@ -1,10 +1,9 @@
-"""Main inference service that processes conversation data in real-time."""
+"""Main inference service for AR glasses - handles two event types."""
 
 import asyncio
 import json
 import logging
 from datetime import datetime
-from uuid import uuid4
 from typing import AsyncGenerator
 
 import httpx
@@ -16,58 +15,93 @@ from models import ConversationEvent, InferenceResult
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("inference_service")
 
-app = FastAPI(title="Inference Service")
+app = FastAPI(title="Inference Service - AR Glasses")
 
 # Queue to hold processed results for streaming to clients
 result_queue: asyncio.Queue[InferenceResult] = asyncio.Queue()
+
+# Mock "database" of people (mutable so we can update last interactions)
+MOCK_PERSON_DATA = {
+    "person_001": {
+        "name": "Sarah",
+        "relationship": "Your daughter",
+        "last_interaction": "Last spoke 3 days ago about her promotion and the grandchildren visiting"
+    },
+    "person_002": {
+        "name": "Michael",
+        "relationship": "Your son",
+        "last_interaction": "Visited yesterday with groceries and talked about his camping trip"
+    },
+    "person_003": {
+        "name": "Robert",
+        "relationship": "Your friend from book club",
+        "last_interaction": "Last week you discussed the mystery novel and college memories"
+    }
+}
 
 # Configuration
 METADATA_SERVICE_URL = "http://localhost:8001/stream/conversation"
 
 
-def hardcoded_inference_logic(event: ConversationEvent) -> InferenceResult:
+def handle_person_detected(event: ConversationEvent) -> InferenceResult:
     """
-    Hardcoded inference logic for prototype.
-    Replace this with actual ML models or business logic.
+    Handle PERSON_DETECTED event - return AR display information.
     """
-    text_lower = event.text.lower()
-
-    # Simple hardcoded sentiment analysis
-    if any(word in text_lower for word in ["great", "thank", "interested", "please"]):
-        sentiment = "positive"
-    elif any(word in text_lower for word in ["question", "clarify", "help"]):
-        sentiment = "neutral"
-    else:
-        sentiment = "positive"
-
-    # Simple keyword extraction (words longer than 4 chars)
-    keywords = [word.strip(",.!?") for word in event.text.split() if len(word) > 4]
-
-    # Hardcoded analysis based on text patterns
-    if "help" in text_lower or "question" in text_lower:
-        analysis = "Customer inquiry detected - requires assistance"
-    elif "pricing" in text_lower or "plan" in text_lower:
-        analysis = "Sales opportunity - discussing pricing/plans"
-    elif "demo" in text_lower or "schedule" in text_lower:
-        analysis = "Demo request - high intent"
-    elif "thank" in text_lower:
-        analysis = "Positive closing - customer satisfied"
-    else:
-        analysis = "General conversation - information exchange"
+    # Get person data (name, relationship, last interaction)
+    person_data = MOCK_PERSON_DATA.get(event.person_id, {
+        "name": "Unknown Person",
+        "relationship": "Unknown relationship",
+        "last_interaction": "No previous interactions"
+    })
 
     result = InferenceResult(
-        result_id=f"res_{uuid4().hex[:8]}",
-        event_id=event.event_id,
         person_id=event.person_id,
-        original_text=event.text,
-        analysis=analysis,
-        sentiment=sentiment,
-        keywords=keywords[:5],  # Limit to top 5
-        timestamp=datetime.utcnow()
+        name=person_data["name"],
+        relationship=person_data["relationship"],
+        description=person_data["last_interaction"]
     )
 
-    logger.info(f"Processed {event.event_id}: {sentiment} sentiment, {len(keywords)} keywords")
+    logger.info(f"Person detected: {person_data['name']} ({event.person_id})")
     return result
+
+
+def handle_conversation_end(event: ConversationEvent) -> None:
+    """
+    Handle CONVERSATION_END event - store conversation for future reference.
+    Updates the person's last_interaction field.
+    """
+    if not event.conversation:
+        logger.warning(f"CONVERSATION_END event for {event.person_id} has no conversation data")
+        return
+
+    # Update person's last interaction in mock database
+    if event.person_id in MOCK_PERSON_DATA:
+        # In production, this would use LLM to generate a summary
+        # For now, create simple summary from conversation structure
+        num_utterances = len(event.conversation)
+
+        # Extract some topic keywords from conversation
+        all_text = " ".join([u.text.lower() for u in event.conversation])
+        topics = []
+        if any(word in all_text for word in ["promotion", "job", "work"]):
+            topics.append("work")
+        if any(word in all_text for word in ["kids", "children", "grandchildren"]):
+            topics.append("family")
+        if any(word in all_text for word in ["visit", "coming", "see you"]):
+            topics.append("upcoming visit")
+
+        if topics:
+            topic_str = " and ".join(topics)
+            summary = f"Just talked about {topic_str}"
+        else:
+            summary = f"Just had a conversation ({num_utterances} messages)"
+
+        MOCK_PERSON_DATA[event.person_id]["last_interaction"] = summary
+
+        logger.info(f"Stored conversation for {MOCK_PERSON_DATA[event.person_id]['name']} ({event.person_id})")
+        logger.info(f"Conversation: {num_utterances} utterances")
+    else:
+        logger.warning(f"Unknown person {event.person_id} - conversation not stored")
 
 
 async def consume_metadata_stream():
@@ -91,13 +125,21 @@ async def consume_metadata_stream():
                                 event_data = json.loads(data)
                                 event = ConversationEvent(**event_data)
 
-                                logger.info(f"Received event: {event.event_id} from {event.person_id}")
+                                # Auto-generate timestamp if not provided
+                                if not event.timestamp:
+                                    event.timestamp = datetime.utcnow()
 
-                                # Process with inference logic
-                                result = hardcoded_inference_logic(event)
+                                logger.info(f"Received {event.event_type} event for {event.person_id}")
 
-                                # Put result in queue for streaming to clients
-                                await result_queue.put(result)
+                                # Route to appropriate handler based on event type
+                                if event.event_type == "PERSON_DETECTED":
+                                    result = handle_person_detected(event)
+                                    # Put result in queue for streaming to AR glasses
+                                    await result_queue.put(result)
+
+                                elif event.event_type == "CONVERSATION_END":
+                                    handle_conversation_end(event)
+                                    # No result to stream - just storage
 
                             except json.JSONDecodeError as e:
                                 logger.error(f"Failed to parse event data: {e}")
@@ -140,13 +182,13 @@ async def generate_inference_results() -> AsyncGenerator[dict, None]:
 @app.on_event("startup")
 async def startup_event():
     """Start background tasks on application startup."""
-    logger.info("Starting inference service...")
+    logger.info("Starting inference service for AR glasses...")
     asyncio.create_task(consume_metadata_stream())
 
 
 @app.get("/stream/inference")
 async def stream_inference():
-    """SSE endpoint that streams processed inference results."""
+    """SSE endpoint that streams processed inference results (PERSON_DETECTED only)."""
     return EventSourceResponse(generate_inference_results())
 
 
@@ -165,7 +207,8 @@ async def root():
     """Root endpoint with service info."""
     return {
         "service": "inference_service",
-        "version": "0.1.0",
+        "version": "0.3.0",
+        "focus": "ar_glasses_two_event_types",
         "endpoints": {
             "inference_stream": "/stream/inference",
             "health": "/health"
