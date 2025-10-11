@@ -315,7 +315,7 @@ export function RayBanOverlay({ stream: _stream, videoRef, visible }: RayBanOver
       >
         <div
           ref={leftLensRef}
-          className="relative flex h-[330px] w-[510px] items-center justify-center overflow-hidden rounded-[60px] bg-black/20 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.08),inset_0_-30px_45px_rgba(0,0,0,0.35)]"
+          className="relative flex h-[330px] w-[510px] items-center justify-center overflow-hidden rounded-[60px] shadow-[inset_0_0_0_1px_rgba(255,255,255,0.08)]"
         >
           <canvas ref={leftCanvasRef} className="h-full w-full" />
         </div>
@@ -324,7 +324,7 @@ export function RayBanOverlay({ stream: _stream, videoRef, visible }: RayBanOver
 
         <div
           ref={rightLensRef}
-          className="relative flex h-[330px] w-[510px] items-center justify-center overflow-hidden rounded-[60px] bg-black/20 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.08),inset_0_-30px_45px_rgba(0,0,0,0.35)]"
+          className="relative flex h-[330px] w-[510px] items-center justify-center overflow-hidden rounded-[60px] shadow-[inset_0_0_0_1px_rgba(255,255,255,0.08)]"
         >
           <canvas ref={rightCanvasRef} className="h-full w-full" />
           {overlayUrl && isHudVisible && (
