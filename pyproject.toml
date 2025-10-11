@@ -7,6 +7,13 @@ dependencies = [
   "fastapi==0.110.0",
   "uvicorn[standard]==0.29.0",
   "aiortc==1.7.0",
+  "numpy>=1.24.0",
+  "torch>=2.1.0",
+  "torchaudio>=2.1.0",
+  "pyannote.audio>=3.1.1",
+  "python-dotenv>=1.0.1",
+  "omegaconf>=2.3.0",
+  "huggingface_hub>=0.22.0",
 ]
 
 [build-system]

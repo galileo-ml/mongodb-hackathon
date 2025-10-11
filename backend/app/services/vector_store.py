@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections import defaultdict
-from typing import DefaultDict, List
+from typing import DefaultDict, List, Set, Tuple
 
 from ..core import SpeakerEmbedding, VectorSimilarityResult
 
@@ -20,6 +20,10 @@ class MongoDBVectorStore:
         self.database = database
         self.collection = collection
         self._store: DefaultDict[str, list[SpeakerEmbedding]] = defaultdict(list)
+        self._metrics_lock = asyncio.Lock()
+        self._query_count = 0
+        self._unique_match_ids: Set[str] = set()
+        self._embedding_total = 0
 
     async def connect(self) -> None:
         """Pretend to establish a connection to MongoDB Atlas."""
@@ -36,6 +40,8 @@ class MongoDBVectorStore:
         """Persist the embedding in the stub store."""
 
         self._store[embedding.session_id].append(embedding)
+        async with self._metrics_lock:
+            self._embedding_total += 1
         logger.info(
             "[stub] Stored embedding for session=%s segment=%s vector_dim=%d",
             embedding.session_id,
@@ -62,10 +68,29 @@ class MongoDBVectorStore:
 
         results.sort(key=lambda r: r.score, reverse=True)
         trimmed = results[:limit]
+        async with self._metrics_lock:
+            self._query_count += 1
+            self._unique_match_ids.update(
+                r.matched_person_id for r in trimmed if r.matched_person_id
+            )
         logger.info(
             "[stub] query returned %d candidates (limit=%d)", len(trimmed), limit
         )
         return trimmed
+
+    async def snapshot_metrics(self) -> Tuple[int, int, int]:
+        """Return and reset lookup metrics.
+
+        Returns a tuple of (lookup_count, unique_matches, total_embeddings).
+        """
+
+        async with self._metrics_lock:
+            lookups = self._query_count
+            unique = len(self._unique_match_ids)
+            total = self._embedding_total
+            self._query_count = 0
+            self._unique_match_ids.clear()
+        return lookups, unique, total
 
     @staticmethod
     def _cosine_proxy(a: list[float], b: list[float]) -> float:

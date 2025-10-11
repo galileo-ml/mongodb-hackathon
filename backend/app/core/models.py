@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal
-
 from pydantic import BaseModel, Field
 
 
@@ -21,6 +19,7 @@ class AudioSegment(BaseModel):
     """Represents a denoised, voice-active slice of audio."""
 
     session_id: str
+    sample_rate: int
     start_ms: int
     end_ms: int
     energy: float
@@ -33,7 +32,7 @@ class SpeakerEmbedding(BaseModel):
     session_id: str
     segment_id: str
     vector: list[float]
-    model: Literal["resemblyzer", "xvector", "custom"] = "resemblyzer"
+    model: str = "pyannote/embedding"
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
 

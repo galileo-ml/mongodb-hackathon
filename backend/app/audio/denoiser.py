@@ -29,6 +29,7 @@ class AdaptiveDenoiser:
         duration_ms = int(len(chunk.data) / 2 / chunk.sample_rate * 1000)
         return AudioSegment(
             session_id=chunk.session_id,
+            sample_rate=chunk.sample_rate,
             start_ms=0,
             end_ms=duration_ms,
             energy=0.0,
