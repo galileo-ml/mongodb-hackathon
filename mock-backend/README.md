@@ -15,8 +15,8 @@ This is a mock FastAPI backend with WebRTC, SSE (Server-Sent Events), and WebSoc
 # Install dependencies
 uv sync
 
-# Run the server
-uv run uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+# Run the server (on port 8001 to avoid conflict with real backend)
+uv run uvicorn app.main:app --reload --host 0.0.0.0 --port 8001
 ```
 
 ## Endpoints
@@ -38,21 +38,22 @@ uv run uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 
 ### Test health endpoint
 ```bash
-curl http://localhost:8000/health
+curl http://localhost:8001/health
 ```
 
 ### Test SSE endpoint
 ```bash
-curl -N http://localhost:8000/events?session_id=test123
+curl -N http://localhost:8001/events?session_id=test123
 ```
 
 ### Full integration test
-1. Run this mock backend: `uv run uvicorn app.main:app --reload --port 8000`
+1. Run this mock backend: `uv run uvicorn app.main:app --reload --port 8001`
 2. Run the Next.js frontend: `cd ../frontend && npm run dev`
-3. Open browser to `http://localhost:3000`
-4. Allow camera/microphone access
-5. Watch for "Connected (WebRTC)" status
-6. Mock AI responses will appear every ~1 second
+3. Update frontend to point to `http://localhost:8001` (or use real backend on 8000)
+4. Open browser to `http://localhost:3000`
+5. Allow camera/microphone access
+6. Watch for "Connected (WebRTC)" status
+7. Mock AI responses will appear every ~5 seconds
 
 ## Mock AI Response Logic
 

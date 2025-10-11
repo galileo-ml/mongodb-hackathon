@@ -14,7 +14,8 @@ from uuid import uuid4
 from aiortc import RTCPeerConnection, RTCSessionDescription
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from .audio import (
@@ -42,7 +43,17 @@ logger.propagate = False
 
 app = FastAPI(title="Multimodal Ingress Prototype")
 
+# CORS middleware for frontend
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 pcs: Set[RTCPeerConnection] = set()
+event_queues: dict[str, asyncio.Queue] = {}  # session_id -> queue for SSE
 ROOT_DIR = Path(__file__).resolve().parents[2]
 FRONTEND_INDEX = ROOT_DIR / "dummy_frontend" / "index.html"
 
@@ -121,6 +132,28 @@ async def log_vector_metrics_periodically() -> None:
 class SDPModel(BaseModel):
     sdp: str
     type: str
+
+
+class PersonData(BaseModel):
+    """Person information sent to frontend via SSE."""
+    name: str
+    description: str
+    relationship: str
+    person_id: str | None = None
+
+
+async def broadcast_person(person: PersonData):
+    """Broadcast person detection to all SSE connections."""
+    dead_queues = []
+    for session_id, queue in event_queues.items():
+        try:
+            await queue.put(person)
+        except Exception as e:
+            logger.error("Failed to send to SSE queue %s: %s", session_id, e)
+            dead_queues.append(session_id)
+    
+    for session_id in dead_queues:
+        event_queues.pop(session_id, None)
 
 
 @app.on_event("startup")
@@ -235,6 +268,50 @@ async def offer(session: SDPModel) -> SDPModel:
 
     logger.info("Returning answer for PeerConnection %s", id(pc))
     return SDPModel(sdp=pc.localDescription.sdp, type=pc.localDescription.type)
+
+
+@app.get("/events")
+async def events_stream(session_id: str = "default"):
+    """
+    SSE endpoint for streaming person detection events to the frontend.
+    
+    When the audio pipeline identifies a speaker, person data will be
+    pushed through this stream.
+    
+    Usage in frontend:
+    ```js
+    const eventSource = new EventSource('http://localhost:8000/events?session_id=abc123');
+    eventSource.onmessage = (event) => {
+        const data = JSON.parse(event.data);
+        console.log('Person detected:', data);
+    };
+    ```
+    """
+    queue = asyncio.Queue()
+    event_queues[session_id] = queue
+    
+    async def event_generator():
+        try:
+            logger.info("📡 SSE client connected: %s", session_id)
+            
+            # Stream person data from queue
+            while True:
+                person_data = await queue.get()
+                yield f"data: {person_data.model_dump_json()}\n\n"
+                
+        except asyncio.CancelledError:
+            logger.info("📡 SSE client disconnected: %s", session_id)
+            event_queues.pop(session_id, None)
+    
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        }
+    )
 
 
 @app.on_event("shutdown")
