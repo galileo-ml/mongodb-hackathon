@@ -27,7 +27,7 @@ app = FastAPI(title="Inference Service - AR Glasses")
 result_queue: asyncio.Queue[InferenceResult] = asyncio.Queue()
 
 # Configuration
-METADATA_SERVICE_URL = "http://localhost:8001/stream/conversation"
+METADATA_SERVICE_URL = "http://localhost:8000/stream/conversation"
 
 
 def handle_person_detected(event: ConversationEvent) -> InferenceResult:

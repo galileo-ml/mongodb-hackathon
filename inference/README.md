@@ -6,7 +6,7 @@ A lightweight prototype demonstrating real-time conversation data processing usi
 
 ```
 Mock Metadata Service → [SSE] → Inference Service → [SSE] → Frontend/Consumer
-   (Port 8001)                     (Port 8002)
+   (Port 8000)                     (Port 8002)
 ```
 
 ## Components
@@ -66,7 +66,7 @@ You need to run the services in separate terminals (all with venv activated):
 source venv/bin/activate
 python mock_metadata_service.py
 ```
-This starts on http://localhost:8001
+This starts on http://localhost:8000
 
 ### Terminal 2: Start Inference Service
 ```bash
@@ -84,7 +84,7 @@ This connects to the inference service and displays results in real-time.
 
 ## API Endpoints
 
-### Mock Metadata Service (Port 8001)
+### Mock Metadata Service (Port 8000)
 - `GET /stream/conversation` - SSE stream of conversation events
 - `GET /health` - Health check
 
@@ -124,7 +124,7 @@ This connects to the inference service and displays results in real-time.
 
 ### Subscribe to conversation events:
 ```bash
-curl -N http://localhost:8001/stream/conversation
+curl -N http://localhost:8000/stream/conversation
 ```
 
 ### Subscribe to inference results:

@@ -117,7 +117,7 @@ PERSON_DETECTED → Shows updated "last interaction" from previous conversation
 ## Running the System
 
 ```bash
-# Terminal 1: Metadata Service (Port 8001)
+# Terminal 1: Metadata Service (Port 8000)
 source venv/bin/activate
 python mock_metadata_service.py
 

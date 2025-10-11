@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react"
 import { Button } from "@/components/ui/button"
-import { Video, VideoOff } from "lucide-react"
+import { Mic, MicOff, Video, VideoOff } from "lucide-react"
 import { FaceNotification } from "@/components/face-notification"
 import { useFaceDetection } from "@/hooks/use-face-detection"
 import { RayBanOverlay } from "@/components/rayban-overlay"
@@ -34,8 +34,10 @@ export default function WebcamStream() {
   const [isConnected, setIsConnected] = useState(false)
   const [eventSource, setEventSource] = useState<EventSource | null>(null)
   const [isRayBanMode, setIsRayBanMode] = useState(false)
+  const [isMuted, setIsMuted] = useState(false)
 
-  const BACKEND_URL = "http://localhost:8002"
+  const INFERENCE_BACKEND_URL = "http://localhost:8002"
+  const OFFER_BACKEND_URL = "http://localhost:8000"
 
   const { detectedFaces, isLoading: isFaceDetectionLoading, error: faceDetectionError } = useFaceDetection(
     videoRef.current,
@@ -93,9 +95,9 @@ export default function WebcamStream() {
 
   const connectSSE = () => {
     try {
-      const es = new EventSource(`${BACKEND_URL}/stream/inference`)
+      const es = new EventSource(`${INFERENCE_BACKEND_URL}/stream/inference`)
 
-      console.log('[SSE] Connecting to:', `${BACKEND_URL}/stream/inference`)
+      console.log('[SSE] Connecting to:', `${INFERENCE_BACKEND_URL}/stream/inference`)
 
       es.onopen = () => {
         console.log('[SSE] Connected')
@@ -176,7 +178,7 @@ export default function WebcamStream() {
       await waitForIceGathering(pc)
       console.log('[WebRTC] ICE gathering complete, sending offer to backend')
 
-      const response = await fetch(`${BACKEND_URL}/offer`, {
+      const response = await fetch(`${OFFER_BACKEND_URL}/offer`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -227,6 +229,9 @@ export default function WebcamStream() {
 
         video.srcObject = stream
         streamRef.current = stream
+        stream.getAudioTracks().forEach((track) => {
+          track.enabled = !isMuted
+        })
         setIsStreaming(true)
         console.log('[Webcam] Stream started')
 
@@ -256,7 +261,22 @@ export default function WebcamStream() {
     setIsVideoReady(false)
     setIsConnected(false)
     setIsRayBanMode(false)
+    setIsMuted(false)
   }
+
+  const toggleMute = useCallback(() => {
+    const stream = streamRef.current
+    if (!stream) {
+      return
+    }
+    setIsMuted((prev) => {
+      const next = !prev
+      stream.getAudioTracks().forEach((track) => {
+        track.enabled = !next
+      })
+      return next
+    })
+  }, [])
 
   const faceNotifications = detectedFaces.map((face) => {
     const video = videoRef.current
@@ -353,6 +373,18 @@ export default function WebcamStream() {
 
       <div className="absolute bottom-0 left-0 right-0 flex items-center justify-center px-6 py-4 bg-gradient-to-t from-black/80 to-transparent">
         <div className="flex flex-wrap items-center gap-3">
+          <Button
+            size="icon"
+            variant={isMuted ? "default" : "secondary"}
+            onClick={toggleMute}
+            className="h-12 w-12 rounded-full"
+            disabled={!isStreaming}
+            aria-pressed={isMuted}
+          >
+            {isMuted ? <MicOff className="h-5 w-5" /> : <Mic className="h-5 w-5" />}
+          </Button>
+          <span className="text-sm text-white/80">{isMuted ? "Unmute" : "Mute"}</span>
+
           <Button
             size="icon"
             variant={isStreaming ? "default" : "secondary"}

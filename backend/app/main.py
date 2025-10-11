@@ -13,6 +13,7 @@ from uuid import uuid4
 from aiortc import RTCPeerConnection, RTCSessionDescription
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
@@ -33,6 +34,14 @@ logger.setLevel(logging.INFO)
 logger.propagate = False
 
 app = FastAPI(title="Multimodal Ingress Prototype")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 pcs: Set[RTCPeerConnection] = set()
 ROOT_DIR = Path(__file__).resolve().parents[2]

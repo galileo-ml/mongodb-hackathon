@@ -69,7 +69,7 @@ AR GLASSES DISPLAY
 ## Running the System
 
 ```bash
-# Terminal 1: Mock Metadata Service (Port 8001)
+# Terminal 1: Mock Metadata Service (Port 8000)
 source venv/bin/activate
 python mock_metadata_service.py
 

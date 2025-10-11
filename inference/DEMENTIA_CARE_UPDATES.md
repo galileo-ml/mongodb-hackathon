@@ -83,7 +83,7 @@ The inference service has been updated to support a dementia care use case with 
 ## Running the Updated System
 
 ```bash
-# Terminal 1: Mock Metadata Service (Port 8001)
+# Terminal 1: Mock Metadata Service (Port 8000)
 source venv/bin/activate
 python mock_metadata_service.py
 
