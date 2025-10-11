@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import time
 import uuid
+import os
 from dataclasses import dataclass
-from typing import Dict, List
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import torch
@@ -30,19 +30,28 @@ try:  # pragma: no cover - optional dependency
 except ImportError:  # pragma: no cover
     webrtcvad = None
 
+try:  # pragma: no cover - optional dependency
+    from pyannote.audio import Inference as PyannoteInference, Model as PyannoteModel
+except ImportError:  # pragma: no cover
+    PyannoteInference = None
+    PyannoteModel = None
+
 logger = logging.getLogger("webrtc.audio.pipeline")
 
 
 @dataclass
 class PipelineConfig:
     target_sample_rate: int = 16_000
-    silence_timeout_seconds: float = 4.0
+    silence_timeout_seconds: float = 2.0
     min_conversation_seconds: float = 2.0
     vad_aggressiveness: int = 3
     transcription_model: str = "large-v3"
     min_speech_rms: float = 0.01
     noise_floor_smoothing: float = 0.9
     noise_gate_margin: float = 0.005
+    embedding_model: str = "pyannote/embedding"
+    speaker_match_threshold: float = 0.7
+    embedding_window_seconds: float = 0.8
 
 
 @dataclass
@@ -54,10 +63,26 @@ class ConversationState:
     noise_floor_rms: float | None = None
     has_speech: bool = False
     chunks: List[np.ndarray] | None = None
+    last_speaker_id: str | None = None
 
     def __post_init__(self) -> None:
         if self.chunks is None:
             self.chunks = []
+
+
+@dataclass
+class TranscriptSegment:
+    start: float
+    end: float
+    text: str
+    speaker: Optional[str] = None
+
+
+@dataclass
+class SpeakerProfile:
+    speaker_id: str
+    embedding: np.ndarray
+    count: int = 1
 
 
 class AudioPipeline:
@@ -74,6 +99,50 @@ class AudioPipeline:
         self._whisper_model = None
         self._whisper_lock = asyncio.Lock()
         self._vad = webrtcvad.Vad(self.config.vad_aggressiveness) if webrtcvad else None
+        self._pyannote_inference = None
+        self._speaker_profiles: List[SpeakerProfile] = []
+        self._speaker_lock = asyncio.Lock()
+        self._next_speaker_index = 1
+        self._pyannote_auth_token = os.getenv("PYANNOTE_AUTH_TOKEN")
+
+        if PyannoteInference is None:
+            logger.warning(
+                "pyannote.audio is not installed; speaker attribution will remain disabled"
+            )
+        else:
+            try:
+                if PyannoteModel is not None:
+                    if not self._pyannote_auth_token:
+                        logger.warning(
+                            "PYANNOTE_AUTH_TOKEN not set; gated models may fail to download"
+                        )
+                    model = PyannoteModel.from_pretrained(
+                        self.config.embedding_model,
+                        use_auth_token=self._pyannote_auth_token,
+                    )
+                    self._pyannote_inference = PyannoteInference(
+                        model=model,
+                        window="whole",
+                    )
+                else:
+                    kwargs = {
+                        "pretrained": self.config.embedding_model,
+                        "window": "whole",
+                    }
+                    if self._pyannote_auth_token:
+                        kwargs["use_auth_token"] = self._pyannote_auth_token
+                    self._pyannote_inference = PyannoteInference(**kwargs)
+                logger.info(
+                    "Loaded pyannote embedding model '%s'",
+                    self.config.embedding_model,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "Failed to initialize pyannote embedding model '%s': %s",
+                    self.config.embedding_model,
+                    exc,
+                )
+                self._pyannote_inference = None
 
     async def process_chunk(self, chunk: AudioChunk) -> None:
         session_id = chunk.session_id
@@ -193,6 +262,7 @@ class AudioPipeline:
             return
 
         transcript = await self._transcribe_audio(audio)
+        await self._assign_speakers(state, audio, transcript)
         if transcript:
             self._print_transcript(state.conversation_id, transcript)
         else:
@@ -209,7 +279,7 @@ class AudioPipeline:
             duration,
         )
 
-    async def _transcribe_audio(self, audio: np.ndarray) -> List[tuple[str, str]]:
+    async def _transcribe_audio(self, audio: np.ndarray) -> List[TranscriptSegment]:
         if whisper is None:
             logger.warning("Whisper not installed; skipping transcription")
             return []
@@ -229,27 +299,41 @@ class AudioPipeline:
             return []
 
         segments = result.get("segments") or []
-        snippets: List[tuple[str, str]] = []
+        snippets: List[TranscriptSegment] = []
         for seg in segments:
             start = float(seg.get("start", 0.0))
-            minutes, seconds = divmod(start, 60.0)
-            millis = int(round((seconds - int(seconds)) * 100))
-            timestamp = f"{int(minutes):02d}:{int(seconds)%60:02d}.{millis:02d}"
+            end = float(seg.get("end", start))
+            if end <= start:
+                duration = float(seg.get("duration", 0.0))
+                end = start + max(duration, 0.0)
             text = (seg.get("text") or "").strip()
             if text:
-                snippets.append((timestamp, text))
+                snippets.append(TranscriptSegment(start=start, end=end, text=text))
         if not snippets and result.get("text"):
-            snippets.append(("00:00.00", result["text"].strip()))
+            total_duration = audio.size / float(self.config.target_sample_rate)
+            snippets.append(
+                TranscriptSegment(
+                    start=0.0,
+                    end=total_duration,
+                    text=result["text"].strip(),
+                )
+            )
         return snippets
 
-    def _print_transcript(self, conversation_id: str, snippets: List[tuple[str, str]]) -> None:
+    def _print_transcript(
+        self, conversation_id: str, snippets: List[TranscriptSegment]
+    ) -> None:
         logger.info(
             "Publishing conversation summary for %s (%d snippets)",
             conversation_id,
             len(snippets),
         )
-        for ts, text in snippets:
-            line = f"[{ts}] Speaker 1: {text}"
+        for segment in snippets:
+            minutes, seconds = divmod(segment.start, 60.0)
+            millis = int(round((seconds - int(seconds)) * 100))
+            timestamp = f"{int(minutes):02d}:{int(seconds)%60:02d}.{millis:02d}"
+            speaker_label = segment.speaker or "Speaker ?"
+            line = f"[{timestamp}] {speaker_label}: {segment.text}"
             print(f"\033[31m{line}\033[0m", flush=True)
 
     async def _load_whisper_model(self):
@@ -311,3 +395,237 @@ class AudioPipeline:
                 logger.debug("WebRTC VAD error: %s", exc)
                 return True
         return False
+
+    async def _assign_speakers(
+        self,
+        state: ConversationState,
+        audio: np.ndarray,
+        snippets: List[TranscriptSegment],
+    ) -> None:
+        if not snippets or audio.size == 0:
+            return
+        if self._pyannote_inference is None:
+            logger.warning(
+                "pyannote embedding unavailable; skipping speaker attribution"
+            )
+            return
+
+        sr = self.config.target_sample_rate
+        windows: List[Tuple[TranscriptSegment, List[np.ndarray]]] = []
+        for segment in snippets:
+            start_idx = max(int(segment.start * sr), 0)
+            end_idx = max(int(segment.end * sr), start_idx + 1)
+            if start_idx >= audio.size:
+                continue
+            end_idx = min(end_idx, audio.size)
+            segment_audio = audio[start_idx:end_idx]
+            if segment_audio.size == 0:
+                continue
+            prepared = self._prepare_embedding_windows(segment_audio)
+            if not prepared:
+                continue
+            windows.append((segment, prepared))
+
+        if not windows:
+            return
+
+        embeddings: List[Tuple[TranscriptSegment, np.ndarray]] = []
+        for segment, prepared_windows in windows:
+            vectors: List[np.ndarray] = []
+            for window in prepared_windows:
+                embedding = await self._embed_audio(window)
+                if embedding is None or embedding.size == 0:
+                    continue
+                vectors.append(embedding)
+
+            if not vectors:
+                logger.info(
+                    "No embedding generated for segment %.2f-%.2f in %s",
+                    segment.start,
+                    segment.end,
+                    state.conversation_id,
+                )
+                continue
+
+            if len(vectors) > 1:
+                stacked = np.vstack(vectors)
+                averaged = stacked.mean(axis=0)
+                logger.info(
+                    "Averaged %d embedding windows for segment %.2f-%.2f in %s",
+                    len(vectors),
+                    segment.start,
+                    segment.end,
+                    state.conversation_id,
+                )
+            else:
+                averaged = vectors[0]
+            embeddings.append((segment, averaged))
+
+        if not embeddings:
+            logger.info(
+                "pyannote produced no embeddings for conversation %s", state.conversation_id
+            )
+            return
+
+        async with self._speaker_lock:
+            for segment, vector in embeddings:
+                speaker_id = self._match_speaker(vector, state.last_speaker_id)
+                segment.speaker = speaker_id
+                state.last_speaker_id = speaker_id
+
+    def _prepare_embedding_windows(self, segment_audio: np.ndarray) -> List[np.ndarray]:
+        window_size = int(self.config.embedding_window_seconds * self.config.target_sample_rate)
+        if window_size <= 0:
+            return []
+        if segment_audio.size <= window_size:
+            return [segment_audio]
+
+        step = max(window_size // 4, 1)
+        windows: List[Tuple[float, np.ndarray]] = []
+        for start in range(0, segment_audio.size - window_size + 1, step):
+            window = segment_audio[start : start + window_size]
+            rms = float(np.sqrt(np.mean(np.square(window))))
+            windows.append((rms, window))
+
+        if not windows:
+            return [segment_audio[-window_size:]]
+
+        windows.sort(key=lambda item: item[0], reverse=True)
+        top_k = min(3, len(windows))
+        return [windows[i][1] for i in range(top_k)]
+
+    async def _embed_audio(self, audio_window: np.ndarray) -> Optional[np.ndarray]:
+        if self._pyannote_inference is None or audio_window.size == 0:
+            return None
+        waveform = torch.from_numpy(audio_window.astype(np.float32)).unsqueeze(0)
+
+        def _infer() -> Optional[np.ndarray]:
+            inference = self._pyannote_inference
+            if inference is None:
+                return None
+            try:
+                result = inference(
+                    {"waveform": waveform, "sample_rate": self.config.target_sample_rate}
+                )
+            except TypeError:
+                # Older pyannote versions expect numpy waveform without dict wrapper
+                logger.debug("pyannote fallback to numpy waveform invocation")
+                result = inference(
+                    waveform.squeeze(0).numpy(), self.config.target_sample_rate
+                )
+            return result
+
+        try:
+            result = await asyncio.to_thread(_infer)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("pyannote embedding failed: %s", exc)
+            return None
+
+        if result is None:
+            logger.info("pyannote inference returned None")
+            return None
+        if hasattr(result, "cpu"):
+            vector = result.detach().cpu().numpy()
+        elif isinstance(result, np.ndarray):
+            vector = result
+        else:
+            vector = np.asarray(result)
+
+        return vector.astype(np.float32, copy=False)
+
+    def _match_speaker(
+        self, vector: np.ndarray, previous_speaker: Optional[str]
+    ) -> str:
+        normalized = self._normalize_vector(vector)
+        if normalized.size == 0:
+            return previous_speaker or self._register_new_speaker(normalized)
+
+        scores: List[Tuple[SpeakerProfile, float]] = []
+        for profile in self._speaker_profiles:
+            score = float(np.dot(normalized, profile.embedding))
+            scores.append((profile, score))
+
+        if scores:
+            similarity_map = ", ".join(
+                f"{profile.speaker_id}:{score:.3f}" for profile, score in scores
+            )
+            logger.info("Speaker similarity map: %s", similarity_map)
+
+        prev_profile = self._find_profile(previous_speaker)
+        prev_score = float("-inf")
+        if prev_profile is not None:
+            prev_score = next(
+                (score for profile, score in scores if profile is prev_profile),
+                float(np.dot(normalized, prev_profile.embedding)),
+            )
+            logger.info(
+                "Speaker similarity with previous %s: %.3f",
+                prev_profile.speaker_id,
+                prev_score,
+            )
+
+        best_profile: Optional[SpeakerProfile] = None
+        best_score = float("-inf")
+        for profile, score in scores:
+            if profile is prev_profile:
+                continue
+            if score > best_score:
+                best_score = score
+                best_profile = profile
+
+        if best_profile is not None:
+            logger.info(
+                "Best speaker candidate %s score=%.3f (threshold=%.3f)",
+                best_profile.speaker_id,
+                best_score,
+                self.config.speaker_match_threshold,
+            )
+
+        if prev_profile is not None and prev_score >= self.config.speaker_match_threshold:
+            self._update_profile(prev_profile, normalized)
+            return prev_profile.speaker_id
+
+        if best_profile is not None and best_score >= self.config.speaker_match_threshold:
+            self._update_profile(best_profile, normalized)
+            return best_profile.speaker_id
+
+        return self._register_new_speaker(normalized)
+
+    def _find_profile(self, speaker_id: Optional[str]) -> Optional[SpeakerProfile]:
+        if speaker_id is None:
+            return None
+        for profile in self._speaker_profiles:
+            if profile.speaker_id == speaker_id:
+                return profile
+        return None
+
+    def _update_profile(self, profile: SpeakerProfile, vector: np.ndarray) -> None:
+        weight = 1.0 / (profile.count + 1)
+        updated = profile.embedding * (1.0 - weight) + vector * weight
+        profile.embedding = self._normalize_vector(updated)
+        profile.count += 1
+
+    def _register_new_speaker(self, vector: np.ndarray) -> str:
+        speaker_id = f"Speaker {self._next_speaker_index}"
+        self._next_speaker_index += 1
+        profile = SpeakerProfile(
+            speaker_id=speaker_id,
+            embedding=self._normalize_vector(vector),
+            count=1,
+        )
+        self._speaker_profiles.append(profile)
+        logger.info(
+            "Registered new speaker profile %s (total=%d)",
+            speaker_id,
+            len(self._speaker_profiles),
+        )
+        return speaker_id
+
+    @staticmethod
+    def _normalize_vector(vector: np.ndarray) -> np.ndarray:
+        if vector.size == 0:
+            return vector
+        norm = float(np.linalg.norm(vector))
+        if norm == 0.0:
+            return np.zeros_like(vector)
+        return (vector / norm).astype(np.float32)
