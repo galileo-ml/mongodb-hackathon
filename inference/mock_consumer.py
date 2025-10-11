@@ -35,7 +35,7 @@ async def consume_inference_stream():
                         continue
 
                     logger.info("✓ Connected to inference stream")
-                    logger.info("=" * 80)
+                    logger.info("=" * 100)
                     retry_delay = 5  # Reset on successful connection
 
                     async for line in response.aiter_lines():
@@ -45,20 +45,17 @@ async def consume_inference_stream():
                                 result_data = json.loads(data)
                                 result = InferenceResult(**result_data)
 
-                                # Display the result
+                                # Display the result - AR glasses format
                                 print("\n" + "=" * 80)
-                                print(f"INFERENCE RESULT [{result.result_id}]")
+                                print("AR GLASSES DISPLAY")
                                 print("=" * 80)
-                                print(f"Person ID:     {result.person_id}")
-                                print(f"Event ID:      {result.event_id}")
-                                print(f"Timestamp:     {result.timestamp}")
-                                print(f"\nOriginal Text: {result.original_text}")
-                                print(f"\nAnalysis:      {result.analysis}")
-                                print(f"Sentiment:     {result.sentiment.upper()}")
-                                print(f"Keywords:      {', '.join(result.keywords)}")
+                                print(f"\n👤 NAME:         {result.name}")
+                                print(f"💙 RELATIONSHIP: {result.relationship}")
+                                print(f"📝 CONTEXT:      {result.description}")
+                                print(f"\n   [Person ID: {result.person_id}]")
                                 print("=" * 80)
 
-                                logger.info(f"Processed result {result.result_id} from {result.person_id}")
+                                logger.info(f"Displayed info for {result.name} ({result.person_id})")
 
                             except json.JSONDecodeError as e:
                                 logger.error(f"Failed to parse result data: {e}")
@@ -81,7 +78,7 @@ async def consume_inference_stream():
 async def main():
     """Main entry point."""
     print("\n" + "=" * 80)
-    print("MOCK CONSUMER - Inference Results Stream")
+    print("MOCK CONSUMER - AR Glasses Display Simulator")
     print("=" * 80)
     print(f"Connecting to: {INFERENCE_SERVICE_URL}")
     print("Press Ctrl+C to stop")

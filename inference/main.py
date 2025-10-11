@@ -1,11 +1,12 @@
-"""Main inference service that processes conversation data in real-time."""
+"""Main inference service that processes conversation data in real-time for dementia care."""
 
 import asyncio
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from uuid import uuid4
 from typing import AsyncGenerator
+from collections import defaultdict
 
 import httpx
 from fastapi import FastAPI
@@ -16,57 +17,90 @@ from models import ConversationEvent, InferenceResult
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("inference_service")
 
-app = FastAPI(title="Inference Service")
+app = FastAPI(title="Inference Service - Dementia Care")
 
 # Queue to hold processed results for streaming to clients
 result_queue: asyncio.Queue[InferenceResult] = asyncio.Queue()
+
+# Track conversation state: conversation_id -> list of utterances
+conversation_state: dict[str, list[ConversationEvent]] = defaultdict(list)
+
+# Mock "database" of people (hardcoded for prototype)
+MOCK_PERSON_DATA = {
+    "person_001": {
+        "name": "Sarah",
+        "relationship": "Your daughter",
+        "last_interaction": "Last spoke 3 days ago about her promotion and the grandchildren visiting"
+    },
+    "person_002": {
+        "name": "Michael",
+        "relationship": "Your son",
+        "last_interaction": "Visited yesterday with groceries and talked about his camping trip"
+    },
+    "person_003": {
+        "name": "Robert",
+        "relationship": "Your friend from book club",
+        "last_interaction": "Last week you discussed the mystery novel and college memories"
+    }
+}
 
 # Configuration
 METADATA_SERVICE_URL = "http://localhost:8001/stream/conversation"
 
 
+def build_description(person_data: dict, utterances: list[ConversationEvent]) -> str:
+    """Build a one-line description for AR glasses display."""
+    # Start with last interaction context
+    base_description = person_data.get("last_interaction", "No previous interactions")
+
+    # If there are utterances in current conversation, update the description
+    if utterances:
+        num_utterances = len(utterances)
+        if num_utterances == 1:
+            base_description = "Just started talking"
+        elif num_utterances < 5:
+            base_description = f"Having a conversation ({num_utterances} messages exchanged)"
+        else:
+            base_description = f"Deep in conversation ({num_utterances} messages)"
+
+    return base_description
+
+
 def hardcoded_inference_logic(event: ConversationEvent) -> InferenceResult:
     """
-    Hardcoded inference logic for prototype.
-    Replace this with actual ML models or business logic.
+    Simple inference logic for AR glasses display.
+    Returns person's name, relationship, and one-line context.
     """
-    text_lower = event.text.lower()
+    # Generate IDs if not provided
+    if not event.event_id:
+        event.event_id = f"evt_{uuid4().hex[:8]}"
 
-    # Simple hardcoded sentiment analysis
-    if any(word in text_lower for word in ["great", "thank", "interested", "please"]):
-        sentiment = "positive"
-    elif any(word in text_lower for word in ["question", "clarify", "help"]):
-        sentiment = "neutral"
-    else:
-        sentiment = "positive"
+    if not event.conversation_id:
+        # Use person_id as conversation key if no conversation_id provided
+        event.conversation_id = f"conv_{event.person_id}"
 
-    # Simple keyword extraction (words longer than 4 chars)
-    keywords = [word.strip(",.!?") for word in event.text.split() if len(word) > 4]
+    # Add event to conversation state
+    conversation_state[event.conversation_id].append(event)
+    utterances = conversation_state[event.conversation_id]
 
-    # Hardcoded analysis based on text patterns
-    if "help" in text_lower or "question" in text_lower:
-        analysis = "Customer inquiry detected - requires assistance"
-    elif "pricing" in text_lower or "plan" in text_lower:
-        analysis = "Sales opportunity - discussing pricing/plans"
-    elif "demo" in text_lower or "schedule" in text_lower:
-        analysis = "Demo request - high intent"
-    elif "thank" in text_lower:
-        analysis = "Positive closing - customer satisfied"
-    else:
-        analysis = "General conversation - information exchange"
+    # Get person data (name, relationship)
+    person_data = MOCK_PERSON_DATA.get(event.person_id, {
+        "name": "Unknown Person",
+        "relationship": "Unknown relationship",
+        "last_interaction": "No previous interactions"
+    })
+
+    # Build description based on conversation state
+    description = build_description(person_data, utterances)
 
     result = InferenceResult(
-        result_id=f"res_{uuid4().hex[:8]}",
-        event_id=event.event_id,
         person_id=event.person_id,
-        original_text=event.text,
-        analysis=analysis,
-        sentiment=sentiment,
-        keywords=keywords[:5],  # Limit to top 5
-        timestamp=datetime.utcnow()
+        name=person_data["name"],
+        relationship=person_data["relationship"],
+        description=description
     )
 
-    logger.info(f"Processed {event.event_id}: {sentiment} sentiment, {len(keywords)} keywords")
+    logger.info(f"Processed event from {person_data['name']} ({event.person_id}): {len(utterances)} utterances")
     return result
 
 
@@ -91,7 +125,7 @@ async def consume_metadata_stream():
                                 event_data = json.loads(data)
                                 event = ConversationEvent(**event_data)
 
-                                logger.info(f"Received event: {event.event_id} from {event.person_id}")
+                                logger.info(f"Received event from {event.person_id}: {event.text[:50]}...")
 
                                 # Process with inference logic
                                 result = hardcoded_inference_logic(event)
@@ -140,7 +174,7 @@ async def generate_inference_results() -> AsyncGenerator[dict, None]:
 @app.on_event("startup")
 async def startup_event():
     """Start background tasks on application startup."""
-    logger.info("Starting inference service...")
+    logger.info("Starting inference service for dementia care...")
     asyncio.create_task(consume_metadata_stream())
 
 
@@ -156,7 +190,8 @@ async def health():
     return {
         "status": "ok",
         "service": "inference_service",
-        "queue_size": result_queue.qsize()
+        "queue_size": result_queue.qsize(),
+        "active_conversations": len(conversation_state)
     }
 
 
@@ -165,7 +200,8 @@ async def root():
     """Root endpoint with service info."""
     return {
         "service": "inference_service",
-        "version": "0.1.0",
+        "version": "0.2.0",
+        "focus": "dementia_care",
         "endpoints": {
             "inference_stream": "/stream/inference",
             "health": "/health"
