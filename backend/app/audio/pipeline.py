@@ -50,7 +50,7 @@ class PipelineConfig:
     noise_floor_smoothing: float = 0.9
     noise_gate_margin: float = 0.005
     embedding_model: str = "pyannote/embedding"
-    speaker_match_threshold: float = 0.7
+    speaker_match_threshold: float = 0.25
     embedding_window_seconds: float = 0.8
 
 
@@ -590,13 +590,19 @@ class AudioPipeline:
                 self.config.speaker_match_threshold,
             )
 
-        if prev_profile is not None and prev_score >= self.config.speaker_match_threshold:
-            self._update_profile(prev_profile, normalized)
-            return prev_profile.speaker_id
+        candidate: Optional[Tuple[SpeakerProfile, float]] = None
+        for profile, score in scores:
+            if score >= self.config.speaker_match_threshold:
+                if candidate is None or score > candidate[1]:
+                    candidate = (profile, score)
 
-        if best_profile is not None and best_score >= self.config.speaker_match_threshold:
-            self._update_profile(best_profile, normalized)
-            return best_profile.speaker_id
+        if candidate is not None:
+            profile, score = candidate
+            logger.info(
+                "Selecting speaker %s with score %.3f", profile.speaker_id, score
+            )
+            self._update_profile(profile, normalized)
+            return profile.speaker_id
 
         return self._register_new_speaker(normalized)
 

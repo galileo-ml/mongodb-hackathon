@@ -31,6 +31,32 @@
       box-shadow: 0 18px 40px rgba(0, 0, 0, 0.45);
     }
 
+    .controls {
+      display: flex;
+      gap: 0.75rem;
+    }
+
+    button {
+      padding: 0.6rem 1.2rem;
+      border-radius: 999px;
+      border: 1px solid rgba(255, 255, 255, 0.25);
+      background: rgba(255, 255, 255, 0.08);
+      color: #f2f2f2;
+      font-size: 0.95rem;
+      cursor: pointer;
+      transition: background 0.2s ease, transform 0.2s ease;
+    }
+
+    button:hover:not([disabled]) {
+      background: rgba(255, 255, 255, 0.18);
+      transform: translateY(-1px);
+    }
+
+    button:disabled {
+      opacity: 0.45;
+      cursor: not-allowed;
+    }
+
     #status {
       font-size: 1rem;
       letter-spacing: 0.02em;
@@ -49,9 +75,14 @@
   <div class="frame">
     <div id="status">Initializing camera...</div>
     <video id="localVideo" autoplay playsinline muted></video>
+    <div class="controls">
+      <button id="muteBtn" disabled>Mute Mic</button>
+    </div>
   </div>
   <script>
     let pc;
+    let audioTrack;
+    let isMuted = false;
 
     async function waitForIceGatheringComplete(connection) {
       if (connection.iceGatheringState === 'complete') {
@@ -73,11 +104,25 @@
     async function start() {
       const statusEl = document.getElementById('status');
       const videoEl = document.getElementById('localVideo');
+      const muteBtn = document.getElementById('muteBtn');
 
       try {
         const mediaStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
         videoEl.srcObject = mediaStream;
         statusEl.textContent = 'Camera ready. Negotiating WebRTC session...';
+
+        audioTrack = mediaStream.getAudioTracks()[0] || null;
+        if (audioTrack) {
+          muteBtn.disabled = false;
+          muteBtn.addEventListener('click', () => {
+            isMuted = !isMuted;
+            audioTrack.enabled = !isMuted;
+            muteBtn.textContent = isMuted ? 'Unmute Mic' : 'Mute Mic';
+            statusEl.textContent = isMuted
+              ? 'Microphone muted. Click to unmute when ready.'
+              : 'Microphone live. Streaming to backend.';
+          });
+        }
 
         pc = new RTCPeerConnection();
         mediaStream.getTracks().forEach((track) => pc.addTrack(track, mediaStream));
