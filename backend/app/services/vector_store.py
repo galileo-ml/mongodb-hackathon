@@ -36,35 +36,38 @@ class MongoDBVectorStore:
         )
         await asyncio.sleep(0)
 
-    async def upsert_embedding(self, embedding: SpeakerEmbedding) -> None:
-        """Persist the embedding in the stub store."""
+    async def upsert_identity_embedding(
+        self, person_id: str, embedding: SpeakerEmbedding
+    ) -> None:
+        """Persist embedding under a global identity."""
 
-        self._store[embedding.session_id].append(embedding)
+        stored = embedding.model_copy()
+        self._store[person_id].append(stored)
         async with self._metrics_lock:
             self._embedding_total += 1
         logger.info(
-            "[stub] Stored embedding for session=%s segment=%s vector_dim=%d",
-            embedding.session_id,
+            "[stub] Stored embedding for identity=%s segment=%s vector_dim=%d",
+            person_id,
             embedding.segment_id,
             len(embedding.vector),
         )
 
-    async def query_similar(
+    async def query_similar_global(
         self, embedding: SpeakerEmbedding, limit: int = 3
     ) -> List[VectorSimilarityResult]:
-        """Return naive cosine-like similarity scores from stub memory."""
+        """Return cosine similarity scores against all stored identities."""
 
-        existing = self._store.get(embedding.session_id, [])
         results: list[VectorSimilarityResult] = []
-        for stored in existing:
-            score = self._cosine_proxy(embedding.vector, stored.vector)
-            results.append(
-                VectorSimilarityResult(
-                    matched_person_id=None,
-                    score=score,
-                    embedding=stored,
+        for person_id, embeddings in self._store.items():
+            for stored in embeddings:
+                score = self._cosine_proxy(embedding.vector, stored.vector)
+                results.append(
+                    VectorSimilarityResult(
+                        matched_person_id=person_id,
+                        score=score,
+                        embedding=stored,
+                    )
                 )
-            )
 
         results.sort(key=lambda r: r.score, reverse=True)
         trimmed = results[:limit]

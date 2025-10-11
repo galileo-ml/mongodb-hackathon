@@ -48,6 +48,7 @@ FRONTEND_INDEX = ROOT_DIR / "dummy_frontend" / "index.html"
 
 # Load environment variables from project root .env (if present)
 load_dotenv(ROOT_DIR / ".env")
+os.environ.setdefault("TORCHAUDIO_PYTHON_ONLY", "1")
 
 vector_store = MongoDBVectorStore(
     uri="mongodb+srv://stub.example.com",
@@ -144,26 +145,21 @@ async def offer(session: SDPModel) -> SDPModel:
     pc = RTCPeerConnection()
     pcs.add(pc)
     session_id = f"sess-{uuid4().hex[:8]}"
-    logger.info("Created PeerConnection %s (%s)", id(pc), session_id)
+
 
     @pc.on("track")
     def on_track(track) -> None:
-        logger.info("Track %s received on %s (%s)", track.kind, id(pc), session_id)
+        if track.kind == "audio":
+            logger.info("Session %s audio track ready", session_id)
 
         if track.kind == "audio":
 
             async def consume_audio() -> None:
-                frame_count = 0
-                last_logged = monotonic()
                 last_sample_rate: int | None = None
                 while True:
                     try:
                         frame = await track.recv()
-                        frame_count += 1
                         if not frame.planes:
-                            logger.warning(
-                                "Audio frame without planes on %s", session_id
-                            )
                             continue
                         plane = frame.planes[0]
                         try:
@@ -172,13 +168,6 @@ async def offer(session: SDPModel) -> SDPModel:
                             data = bytes(plane)
                         sample_rate = getattr(frame, "sample_rate", None) or 16000
                         last_sample_rate = sample_rate
-                        if frame_count == 1:
-                            logger.info(
-                                "Session %s received first audio frame (%d bytes, sr=%d)",
-                                session_id,
-                                len(data),
-                                sample_rate,
-                            )
                         chunk = AudioChunk(
                             session_id=session_id,
                             data=data,
@@ -186,7 +175,7 @@ async def offer(session: SDPModel) -> SDPModel:
                             timestamp=datetime.utcnow(),
                         )
                         try:
-                            matches = await audio_pipeline.process_chunk(chunk)
+                            await audio_pipeline.process_chunk(chunk)
                         except Exception as exc:  # noqa: BLE001
                             logger.exception(
                                 "Audio pipeline error for session %s: %s",
@@ -194,43 +183,12 @@ async def offer(session: SDPModel) -> SDPModel:
                                 exc,
                             )
                             continue
-                        if matches:
-                            best = matches[0]
-                            logger.info(
-                                "Session %s best similarity score=%.3f segment=%s",
-                                session_id,
-                                best.score,
-                                best.embedding.segment_id,
-                            )
-                        now = monotonic()
-                        elapsed = now - last_logged
-                        if elapsed >= 1:
-                            logger.info(
-                                "Peer %s audio: %d frames in %.2fs (last pts=%s)",
-                                id(pc),
-                                frame_count,
-                                elapsed,
-                                getattr(frame, "pts", "?"),
-                            )
-                            frame_count = 0
-                            last_logged = now
-                    except Exception as exc:  # noqa: BLE001
-                        logger.info("Audio track on %s ended: %s", id(pc), exc)
+                    except Exception:  # noqa: BLE001
                         break
 
                 if last_sample_rate:
                     try:
-                        tail_matches = await audio_pipeline.flush_session(
-                            session_id, last_sample_rate
-                        )
-                        if tail_matches:
-                            best = tail_matches[0]
-                            logger.info(
-                                "Session %s tail similarity score=%.3f segment=%s",
-                                session_id,
-                                best.score,
-                                best.embedding.segment_id,
-                            )
+                        await audio_pipeline.flush_session(session_id, last_sample_rate)
                     except Exception as exc:  # noqa: BLE001
                         logger.exception(
                             "Error flushing audio buffer for session %s: %s",
@@ -271,7 +229,6 @@ async def offer(session: SDPModel) -> SDPModel:
 
     @pc.on("connectionstatechange")
     async def on_connectionstatechange() -> None:
-        logger.info("PeerConnection %s state %s", id(pc), pc.connectionState)
         if pc.connectionState in {"failed", "closed"}:
             await pc.close()
             pcs.discard(pc)
