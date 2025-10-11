@@ -411,7 +411,9 @@ class AudioPipeline:
             return
 
         sr = self.config.target_sample_rate
-        windows: List[Tuple[TranscriptSegment, List[np.ndarray]]] = []
+        windows: List[
+            Tuple[TranscriptSegment, List[Tuple[np.ndarray, float]]]
+        ] = []
         for segment in snippets:
             start_idx = max(int(segment.start * sr), 0)
             end_idx = max(int(segment.end * sr), start_idx + 1)
@@ -431,12 +433,12 @@ class AudioPipeline:
 
         embeddings: List[Tuple[TranscriptSegment, np.ndarray]] = []
         for segment, prepared_windows in windows:
-            vectors: List[np.ndarray] = []
-            for window in prepared_windows:
+            vectors: List[Tuple[np.ndarray, float]] = []
+            for window, weight in prepared_windows:
                 embedding = await self._embed_audio(window)
                 if embedding is None or embedding.size == 0:
                     continue
-                vectors.append(embedding)
+                vectors.append((embedding, weight))
 
             if not vectors:
                 logger.info(
@@ -448,8 +450,10 @@ class AudioPipeline:
                 continue
 
             if len(vectors) > 1:
-                stacked = np.vstack(vectors)
-                averaged = stacked.mean(axis=0)
+                embeddings_array = np.vstack([vec for vec, _ in vectors])
+                weights = np.array([max(weight, 1e-6) for _, weight in vectors])
+                weights /= weights.sum()
+                averaged = (embeddings_array * weights[:, None]).sum(axis=0)
                 logger.info(
                     "Averaged %d embedding windows for segment %.2f-%.2f in %s",
                     len(vectors),
@@ -458,7 +462,7 @@ class AudioPipeline:
                     state.conversation_id,
                 )
             else:
-                averaged = vectors[0]
+                averaged = vectors[0][0]
             embeddings.append((segment, averaged))
 
         if not embeddings:
@@ -473,14 +477,17 @@ class AudioPipeline:
                 segment.speaker = speaker_id
                 state.last_speaker_id = speaker_id
 
-    def _prepare_embedding_windows(self, segment_audio: np.ndarray) -> List[np.ndarray]:
+    def _prepare_embedding_windows(
+        self, segment_audio: np.ndarray
+    ) -> List[Tuple[np.ndarray, float]]:
         window_size = int(self.config.embedding_window_seconds * self.config.target_sample_rate)
         if window_size <= 0:
             return []
         if segment_audio.size <= window_size:
-            return [segment_audio]
+            rms = float(np.sqrt(np.mean(np.square(segment_audio))))
+            return [(segment_audio, rms)]
 
-        step = max(window_size // 4, 1)
+        step = max(window_size // 6, 1)
         windows: List[Tuple[float, np.ndarray]] = []
         for start in range(0, segment_audio.size - window_size + 1, step):
             window = segment_audio[start : start + window_size]
@@ -488,11 +495,13 @@ class AudioPipeline:
             windows.append((rms, window))
 
         if not windows:
-            return [segment_audio[-window_size:]]
+            tail = segment_audio[-window_size:]
+            rms = float(np.sqrt(np.mean(np.square(tail))))
+            return [(tail, rms)]
 
         windows.sort(key=lambda item: item[0], reverse=True)
-        top_k = min(3, len(windows))
-        return [windows[i][1] for i in range(top_k)]
+        top_k = min(5, len(windows))
+        return [(windows[i][1], windows[i][0]) for i in range(top_k)]
 
     async def _embed_audio(self, audio_window: np.ndarray) -> Optional[np.ndarray]:
         if self._pyannote_inference is None or audio_window.size == 0:
