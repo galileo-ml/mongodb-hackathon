@@ -4,10 +4,11 @@ import asyncio
 import json
 import logging
 from datetime import datetime
-from typing import AsyncGenerator
+from typing import AsyncGenerator, Optional
 
 import httpx
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from sse_starlette.sse import EventSourceResponse
 
 from database import create_person, get_person_by_id, update_person_context
@@ -23,6 +24,18 @@ logger = logging.getLogger("inference_service")
 
 app = FastAPI(title="Inference Service - AR Glasses")
 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "http://localhost:3001",
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 # Queue to hold processed results for streaming to clients
 result_queue: asyncio.Queue[InferenceResult] = asyncio.Queue()
 
@@ -30,12 +43,27 @@ result_queue: asyncio.Queue[InferenceResult] = asyncio.Queue()
 METADATA_SERVICE_URL = "http://localhost:8000/stream/conversation"
 
 
+def safe_get_person(person_id: str) -> Optional[dict]:
+    try:
+        return get_person_by_id(person_id)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Database lookup failed for %s: %s", person_id, exc)
+        return None
+
+
 def handle_person_detected(event: ConversationEvent) -> InferenceResult:
     """
     Handle PERSON_DETECTED event - return AR display information from MongoDB.
     """
     # Query MongoDB for person data
-    person_doc = get_person_by_id(event.person_id)
+    person_doc = safe_get_person(event.person_id)
+
+    latest_utterance = None
+    if event.conversation:
+        try:
+            latest_utterance = event.conversation[-1].text
+        except Exception:  # noqa: BLE001
+            latest_utterance = None
 
     if person_doc:
         result = InferenceResult(
@@ -46,12 +74,19 @@ def handle_person_detected(event: ConversationEvent) -> InferenceResult:
         )
         logger.info(f"Person detected: {person_doc['name']} ({event.person_id})")
     else:
+        person_label = event.person_id or "speaker_unknown"
+        friendly_name = person_label.replace("_", " ").title()
+        if person_label and person_label.startswith("speaker_"):
+            suffix = person_label[8:]
+            if suffix.isdigit():
+                friendly_name = f"Speaker {suffix}"
+        description = latest_utterance or "No previous interactions"
         # Person not found in database
         result = InferenceResult(
-            person_id=event.person_id,
-            name="Unknown Person",
-            relationship="Unknown relationship",
-            description="No previous interactions"
+            person_id=person_label,
+            name=friendly_name,
+            relationship="Unidentified speaker",
+            description=description,
         )
         logger.warning(f"Person not found in database: {event.person_id}")
 
@@ -73,7 +108,7 @@ async def handle_conversation_end(event: ConversationEvent) -> None:
         return
 
     # Get current person data from MongoDB
-    person_doc = get_person_by_id(event.person_id)
+    person_doc = safe_get_person(event.person_id)
 
     # Scenario 1: NEW PERSON - Infer details from conversation
     if not person_doc:
@@ -84,17 +119,23 @@ async def handle_conversation_end(event: ConversationEvent) -> None:
             # Call Fireworks Model #3: Infer person details
             inferred_details = await infer_new_person_details(event.conversation)
 
-            # Create new person in MongoDB
-            new_person = create_person(
-                person_id=event.person_id,
-                name=inferred_details["name"],
-                relationship=inferred_details["relationship"],
-                aggregated_context=inferred_details["aggregated_context"],
-                cached_description=inferred_details["cached_description"]
-            )
+            try:
+                create_person(
+                    person_id=event.person_id,
+                    name=inferred_details["name"],
+                    relationship=inferred_details["relationship"],
+                    aggregated_context=inferred_details["aggregated_context"],
+                    cached_description=inferred_details["cached_description"],
+                )
 
-            logger.info(f"✓ Created new person: {inferred_details['name']} ({inferred_details['relationship']})")
-            logger.info(f"  Description: {inferred_details['cached_description']}")
+                logger.info(
+                    f"✓ Created new person: {inferred_details['name']} ({inferred_details['relationship']})"
+                )
+                logger.info(f"  Description: {inferred_details['cached_description']}")
+            except Exception as create_exc:  # noqa: BLE001
+                logger.warning(
+                    "Could not persist new person %s: %s", event.person_id, create_exc
+                )
             return
 
         except Exception as e:
@@ -103,7 +144,11 @@ async def handle_conversation_end(event: ConversationEvent) -> None:
             return
 
     # Scenario 2: EXISTING PERSON - Update with new conversation
-    logger.info(f"Processing conversation end for {person_doc['name']} ({event.person_id})")
+    logger.info(
+        "Processing conversation end for %s (%s)",
+        person_doc["name"],
+        event.person_id,
+    )
     logger.info(f"Conversation: {len(event.conversation)} utterances")
 
     try:
@@ -111,25 +156,32 @@ async def handle_conversation_end(event: ConversationEvent) -> None:
         updated_context = await aggregate_conversation_context(
             person_name=person_doc["name"],
             current_context=person_doc["aggregated_context"],
-            new_conversation=event.conversation
+            new_conversation=event.conversation,
         )
 
         # Call Fireworks Model #2: Generate AR description
         new_description = await generate_ar_description(
             person_name=person_doc["name"],
             relationship=person_doc["relationship"],
-            aggregated_context=updated_context
+            aggregated_context=updated_context,
         )
 
-        # Update MongoDB with AI-generated results
-        updated = update_person_context(
-            person_id=event.person_id,
-            aggregated_context=updated_context,
-            cached_description=new_description
-        )
+        try:
+            updated = update_person_context(
+                person_id=event.person_id,
+                aggregated_context=updated_context,
+                cached_description=new_description,
+            )
+        except Exception as update_exc:  # noqa: BLE001
+            logger.warning(
+                "Could not update person %s: %s", event.person_id, update_exc
+            )
+            return
 
         if updated:
-            logger.info(f"✓ Successfully updated {person_doc['name']} with AI-generated content")
+            logger.info(
+                f"✓ Successfully updated {person_doc['name']} with AI-generated content"
+            )
             logger.info(f"  New context: {updated_context[:100]}...")
             logger.info(f"  New description: {new_description}")
         else:

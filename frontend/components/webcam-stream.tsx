@@ -113,6 +113,7 @@ export default function WebcamStream() {
               name: message.name,
               description: message.description,
               relationship: message.relationship,
+              person_id: message.person_id,
             })
           }
         } catch (err) {

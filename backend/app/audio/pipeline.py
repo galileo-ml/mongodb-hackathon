@@ -104,7 +104,7 @@ class AudioPipeline:
         self._pyannote_inference = None
         self._speaker_profiles: List[SpeakerProfile] = []
         self._speaker_lock = asyncio.Lock()
-        self._next_speaker_index = 1
+        self._next_speaker_index = 10
         self._pyannote_auth_token = os.getenv("PYANNOTE_AUTH_TOKEN")
         self._conversation_bus = conversation_bus
 
@@ -265,7 +265,7 @@ class AudioPipeline:
             return
 
         transcript = await self._transcribe_audio(audio)
-        await self._assign_speakers(state, audio, transcript)
+        await self._assign_speakers(state, session_id, audio, transcript)
         await self._publish_conversation_event(state, session_id, transcript)
         if transcript:
             self._print_transcript(state.conversation_id, transcript)
@@ -336,9 +336,53 @@ class AudioPipeline:
             minutes, seconds = divmod(segment.start, 60.0)
             millis = int(round((seconds - int(seconds)) * 100))
             timestamp = f"{int(minutes):02d}:{int(seconds)%60:02d}.{millis:02d}"
-            speaker_label = segment.speaker or "Speaker ?"
+            speaker_label = segment.speaker or "speaker_unknown"
             line = f"[{timestamp}] {speaker_label}: {segment.text}"
             print(f"\033[31m{line}\033[0m", flush=True)
+
+    async def _publish_person_detected(
+        self,
+        session_id: str,
+        conversation_id: str,
+        speaker_id: str,
+        utterance: str | None = None,
+        is_new: bool = False,
+    ) -> None:
+        if self._conversation_bus is None:
+            return
+
+        conversation: list[ConversationUtterance] = []
+        if utterance:
+            conversation.append(
+                ConversationUtterance(
+                    speaker=speaker_id,
+                    text=utterance,
+                )
+            )
+
+        event = ConversationEvent(
+            event_type="PERSON_DETECTED",
+            person_id=speaker_id,
+            conversation_id=conversation_id,
+            session_id=session_id,
+            conversation=conversation,
+        )
+
+        try:
+            await self._conversation_bus.publish(event)
+            logger.info(
+                "Published PERSON_DETECTED for %s (session=%s, conversation=%s, new=%s)",
+                speaker_id,
+                session_id,
+                conversation_id,
+                is_new,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.exception(
+                "Failed to publish PERSON_DETECTED for %s: %s",
+                speaker_id,
+                exc,
+            )
 
     async def _publish_conversation_event(
         self,
@@ -349,18 +393,25 @@ class AudioPipeline:
         if not snippets or self._conversation_bus is None:
             return
 
-        utterances = [
+        conversation = [
             ConversationUtterance(
-                speaker=segment.speaker or "Speaker ?",
+                speaker=segment.speaker or "speaker_unknown",
                 text=segment.text,
             )
             for segment in snippets
         ]
 
+        primary_speaker = next(
+            (entry.speaker for entry in conversation if entry.speaker != "speaker_unknown"),
+            state.last_speaker_id,
+        ) or "speaker_unknown"
+
         event = ConversationEvent(
+            event_type="CONVERSATION_END",
             conversation_id=state.conversation_id,
             session_id=session_id,
-            utterances=utterances,
+            person_id=primary_speaker,
+            conversation=conversation,
         )
 
         try:
@@ -368,7 +419,7 @@ class AudioPipeline:
             logger.info(
                 "Published conversation event %s with %d utterances",
                 state.conversation_id,
-                len(utterances),
+                len(conversation),
             )
         except Exception as exc:  # noqa: BLE001
             logger.exception(
@@ -440,15 +491,40 @@ class AudioPipeline:
     async def _assign_speakers(
         self,
         state: ConversationState,
+        session_id: str,
         audio: np.ndarray,
         snippets: List[TranscriptSegment],
     ) -> None:
         if not snippets or audio.size == 0:
             return
+
+        publish_queue: List[Tuple[str, Optional[str], bool]] = []
+
         if self._pyannote_inference is None:
             logger.warning(
-                "pyannote embedding unavailable; skipping speaker attribution"
+                "pyannote embedding unavailable; using fallback speaker attribution"
             )
+            async with self._speaker_lock:
+                speaker_id = state.last_speaker_id
+                is_new = False
+                if speaker_id is None:
+                    speaker_id = self._register_new_speaker(np.zeros(1, dtype=np.float32))
+                    state.last_speaker_id = speaker_id
+                    is_new = True
+
+                for segment in snippets:
+                    segment.speaker = speaker_id
+                    publish_queue.append((speaker_id, segment.text, is_new))
+                    is_new = False
+
+            for speaker_id, utterance, is_new in publish_queue:
+                await self._publish_person_detected(
+                    session_id=session_id,
+                    conversation_id=state.conversation_id,
+                    speaker_id=speaker_id,
+                    utterance=utterance,
+                    is_new=is_new,
+                )
             return
 
         sr = self.config.target_sample_rate
@@ -514,9 +590,19 @@ class AudioPipeline:
 
         async with self._speaker_lock:
             for segment, vector in embeddings:
-                speaker_id = self._match_speaker(vector, state.last_speaker_id)
+                speaker_id, is_new = self._match_speaker(vector, state.last_speaker_id)
                 segment.speaker = speaker_id
                 state.last_speaker_id = speaker_id
+                publish_queue.append((speaker_id, segment.text, is_new))
+
+        for speaker_id, utterance, is_new in publish_queue:
+            await self._publish_person_detected(
+                session_id=session_id,
+                conversation_id=state.conversation_id,
+                speaker_id=speaker_id,
+                utterance=utterance,
+                is_new=is_new,
+            )
 
     def _prepare_embedding_windows(
         self, segment_audio: np.ndarray
@@ -585,10 +671,11 @@ class AudioPipeline:
 
     def _match_speaker(
         self, vector: np.ndarray, previous_speaker: Optional[str]
-    ) -> str:
+    ) -> Tuple[str, bool]:
         normalized = self._normalize_vector(vector)
         if normalized.size == 0:
-            return previous_speaker or self._register_new_speaker(normalized)
+            fallback = previous_speaker or self._register_new_speaker(normalized)
+            return fallback, fallback != previous_speaker
 
         scores: List[Tuple[SpeakerProfile, float]] = []
         for profile in self._speaker_profiles:
@@ -643,9 +730,10 @@ class AudioPipeline:
                 "Selecting speaker %s with score %.3f", profile.speaker_id, score
             )
             self._update_profile(profile, normalized)
-            return profile.speaker_id
+            return profile.speaker_id, False
 
-        return self._register_new_speaker(normalized)
+        new_id = self._register_new_speaker(normalized)
+        return new_id, True
 
     def _find_profile(self, speaker_id: Optional[str]) -> Optional[SpeakerProfile]:
         if speaker_id is None:
@@ -662,7 +750,7 @@ class AudioPipeline:
         profile.count += 1
 
     def _register_new_speaker(self, vector: np.ndarray) -> str:
-        speaker_id = f"Speaker {self._next_speaker_index}"
+        speaker_id = f"speaker_{self._next_speaker_index:03d}"
         self._next_speaker_index += 1
         profile = SpeakerProfile(
             speaker_id=speaker_id,

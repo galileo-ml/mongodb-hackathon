@@ -24,7 +24,12 @@ class ConversationEventBus:
         async with self._lock:
             targets = list(self._subscribers)
         if not targets:
-            logger.debug("No active subscribers; dropping conversation event %s", event.conversation_id)
+            logger.debug(
+                "No active subscribers; dropping %s event (person=%s conversation=%s)",
+                event.event_type,
+                event.person_id,
+                event.conversation_id,
+            )
             return
 
         for queue in targets:

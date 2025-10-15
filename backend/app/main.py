@@ -183,7 +183,7 @@ async def on_shutdown() -> None:
 
 @app.get("/stream/conversation")
 async def stream_conversation() -> StreamingResponse:
-    """Server-Sent Events stream of completed conversations."""
+    """Server-Sent Events stream of conversation metadata events."""
 
     async def event_generator():
         queue = await conversation_bus.subscribe()

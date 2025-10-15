@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal
+from typing import Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -54,10 +54,46 @@ class ConversationUtterance(BaseModel):
 
 
 class ConversationEvent(BaseModel):
-    """Event emitted when a conversation ends."""
+    """Event emitted by the audio pipeline for downstream consumers."""
 
-    event_type: Literal["CONVERSATION_END"] = "CONVERSATION_END"
-    conversation_id: str
-    session_id: str
+    event_type: Literal["PERSON_DETECTED", "CONVERSATION_END"]
     timestamp: datetime = Field(default_factory=datetime.utcnow)
-    utterances: list[ConversationUtterance] = Field(default_factory=list)
+    person_id: Optional[str] = None
+    conversation_id: Optional[str] = None
+    session_id: Optional[str] = None
+    conversation: list[ConversationUtterance] = Field(default_factory=list)
+
+    class Config:
+        json_schema_extra = {
+            "examples": [
+                {
+                    "event_type": "PERSON_DETECTED",
+                    "person_id": "speaker_010",
+                    "session_id": "sess-1234",
+                    "timestamp": "2025-10-11T14:30:00Z",
+                    "conversation": [
+                        {
+                            "speaker": "speaker_010",
+                            "text": "Hey there, it's me again!",
+                        }
+                    ],
+                },
+                {
+                    "event_type": "CONVERSATION_END",
+                    "person_id": "speaker_010",
+                    "conversation_id": "sess-1234-conv01",
+                    "session_id": "sess-1234",
+                    "timestamp": "2025-10-11T14:35:00Z",
+                    "conversation": [
+                        {
+                            "speaker": "speaker_010",
+                            "text": "Hi there, how are you today?",
+                        },
+                        {
+                            "speaker": "speaker_patient",
+                            "text": "I'm doing well, thank you!",
+                        },
+                    ],
+                },
+            ]
+        }

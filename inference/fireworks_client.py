@@ -80,7 +80,7 @@ Provide the updated aggregated context:"""
         logger.info(f"Calling Fireworks Model #1 (Context Aggregation) for {person_name}")
 
         response = await client.chat.completions.create(
-            model=FIREWORKS_MODEL,
+            model="accounts/vatsalbajaj99-95db01/models/ft-mgmuf4jo-gl1ld",
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt}
@@ -157,7 +157,7 @@ Generate a specific, memorable AR description:"""
         logger.info(f"Calling Fireworks Model #2 (Description Generation) for {person_name}")
 
         response = await client.chat.completions.create(
-            model=FIREWORKS_MODEL,
+            model="accounts/vatsalbajaj99-95db01/models/ft-mgmuqvuq-yhw7x",
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt}
